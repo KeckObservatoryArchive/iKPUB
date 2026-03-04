@@ -1,10 +1,16 @@
+# Standard Library
 import re
 import sqlite3
-import pandas as pd
+from pathlib import Path
+
+# 3rd Party
 from sentence_transformers import SentenceTransformer
+import pandas as pd
+
+PROJECT_ROOT = Path(__file__).parents[2]
 
 # Embedding model — swap and re-run to experiment
-MODEL_NAME = "all-mpnet-base-v2"
+MODEL_NAME = PROJECT_ROOT / "data" / "models" / "all-mpnet-base-v2"
 # MODEL_NAME = "malteos/scincl"          # Citation-graph trained, scientific papers
 # MODEL_NAME = "allenai/specter2_base"   # SPECTER2 base (no adapter); CLS pooling mismatch
 
@@ -27,7 +33,7 @@ def embed(df: pd.DataFrame, model_name: str = MODEL_NAME) -> pd.DataFrame:
     Expects columns: title, abstract.
     Returns the same DataFrame with 'embedding' appended.
     """
-    model = SentenceTransformer(model_name)
+    model = SentenceTransformer(str(model_name))
 
     # Concatenate title and abstract; [SEP] is the separator scincl was trained on.
     # For all-mpnet-base-v2 this is benign but can be swapped to a space if preferred.

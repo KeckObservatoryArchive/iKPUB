@@ -13,6 +13,8 @@ wheels/
 # Data
 data/proposals/**
 data/pubs/**
+data/coversheets/**
+data/models/**
 
 notebooks/
 .archive
