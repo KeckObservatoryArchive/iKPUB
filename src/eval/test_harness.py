@@ -17,7 +17,7 @@ def eval_model(model=None):
     if model is None:
         model = AutoClassifier()
 
-    pubs = embed(load_publications(DB_PATH))
+    pubs = load_publications(DB_PATH)
     X = pubs.drop("keck_manual", axis=1)
     y = pubs["keck_manual"]
 
@@ -31,12 +31,14 @@ def eval_model(model=None):
 
 def summary_statistics(report: dict, y_test, predictions) -> dict:
     tn, fp, fn, tp = confusion_matrix(y_test, predictions, labels=[0, 1]).ravel()
+    total = tn + fp + fn + tp
     return {
         "accuracy": report["accuracy"],
-        "precision": report["weighted avg"]["precision"],
-        "recall": report["weighted avg"]["recall"],
-        "f1": report["weighted avg"]["f1-score"],
-        "confusion_matrix": {"tn": tn, "fp": fp, "fn": fn, "tp": tp},
+        "confusion_matrix": {
+            "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp),
+            "tn_pct": tn / total, "fp_pct": fp / total,
+            "fn_pct": fn / total, "tp_pct": tp / total,
+        },
     }
 
 
@@ -44,6 +46,5 @@ if __name__ == "__main__":
     report, y_test, predictions = eval_model()
     stats = summary_statistics(report, y_test, predictions)
     cm = stats.pop("confusion_matrix")
-    for k, v in stats.items():
-        print(f"{k}: {v:.4f}")
-    print(f"confusion matrix: tn={cm['tn']} fp={cm['fp']} fn={cm['fn']} tp={cm['tp']}")
+    print(f"accuracy: {stats['accuracy']:.4f}")
+    print(f"confusion matrix: tn={cm['tn']} ({cm['tn_pct']:.1%})  fp={cm['fp']} ({cm['fp_pct']:.1%})  fn={cm['fn']} ({cm['fn_pct']:.1%})  tp={cm['tp']} ({cm['tp_pct']:.1%})")

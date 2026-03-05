@@ -1,4 +1,5 @@
 # Standard Library
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -21,7 +22,7 @@ def load_publications(db_path: str, query: str = "SELECT * FROM publications") -
 
 def clean_authors(authors_str: str) -> str:
     """Lowercase and strip non-alphabetic punctuation from an author string."""
-    if not authors_str:
+    if not isinstance(authors_str, str):
         return ""
     cleaned = re.sub(r"[^a-z,\s\-]", "", authors_str.lower())
     return re.sub(r"\s*,\s*", ", ", cleaned).strip()
@@ -59,7 +60,35 @@ def merge_manual(df: pd.DataFrame, manual: pd.DataFrame) -> pd.DataFrame:
 def load_pubs(db_path: str, manual: pd.DataFrame, query: str = "SELECT * FROM publications") -> pd.DataFrame:
     """Load, clean, embed, and label publications end to end."""
     df = load_publications(db_path, query)
-    df["authors_clean"] = df["authors"].apply(clean_authors)
+    df["authors_clean"] = df["author"].apply(clean_authors)
     df = merge_manual(df, manual)
     df = embed(df)
     return df
+
+
+if __name__ == "__main__":
+    db_path = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
+    manual_db_path = PROJECT_ROOT / "data" / "pubs" / "manual_kpub.db"
+
+    # Load
+    df = load_publications(str(db_path))
+
+    # Clean authors
+    df["authors_clean"] = df["author"].apply(clean_authors)
+
+    # Keck manual labels from manual_kpub.db
+    with sqlite3.connect(str(manual_db_path)) as con:
+        manual = pd.read_sql("SELECT bibcode FROM pubs WHERE mission = 'keck'", con)
+    df["keck_manual"] = df["bibcode"].isin(manual["bibcode"])
+
+    # Embeddings
+    df = embed(df)
+
+    # Serialize embeddings to JSON strings for SQLite
+    df["embedding"] = df["embedding"].apply(json.dumps)
+
+    # Write back
+    with sqlite3.connect(str(db_path)) as con:
+        df.to_sql("publications", con, if_exists="replace", index=False)
+
+    print(f"Preprocessed {len(df)} publications → {db_path}")
