@@ -1,3 +1,7 @@
+"""
+Query ads for publications. Change the query using the constants at the top of this file. 
+"""
+
 import json
 import sqlite3
 import os

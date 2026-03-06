@@ -17,7 +17,8 @@ def eval_model(model=None):
     if model is None:
         model = AutoClassifier()
 
-    pubs = load_publications(DB_PATH)
+    # We test only on data before 2024 because only 2023 and earlier have manual publications that we have confirmed 
+    pubs = load_publications(DB_PATH, query = "SELECT * FROM publications WHERE year < 2024")
     X = pubs.drop("keck_manual", axis=1)
     y = pubs["keck_manual"]
 
