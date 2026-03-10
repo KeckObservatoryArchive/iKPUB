@@ -1,51 +1,112 @@
 # Standard Library
+import json
+import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
-# 3rd Party 
-import pandas as pd
+# 3rd Party
+import yaml
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import confusion_matrix, accuracy_score
 
 # Local
-from data_pipes.preprocess import load_publications, embed
+from data_pipes.preprocess import load_publications
+from models.transformer import TransformerClassifier
+from models.embedding import EmbeddingClassifier
 from models.auto import AutoClassifier
 
 PROJECT_ROOT = Path(__file__).parents[2]
 DB_PATH = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
+CONFIG_PATH = PROJECT_ROOT / "config" / "models.yaml"
+OUTPUT_DIR = PROJECT_ROOT / "out" / "experiments"
 
-def eval_model(model=None):
-    if model is None:
-        model = AutoClassifier()
+MODELS = {
+    "transformer": TransformerClassifier,
+    "embedding": EmbeddingClassifier,
+    "auto": AutoClassifier,
+}
 
-    # We test only on data before 2024 because only 2023 and earlier have manual publications that we have confirmed 
-    pubs = load_publications(DB_PATH, query = "SELECT * FROM publications WHERE year < 2024")
+# Map config keys to constructor param names where they differ
+CONFIG_KEY_MAP = {
+    "learning_rate": "lr",
+}
+
+
+def load_config(model_name: str) -> dict:
+    """Load model config from models.yaml."""
+    with open(CONFIG_PATH) as f:
+        all_config = yaml.safe_load(f)
+    config = all_config.get(model_name, {})
+    # Remap keys to match constructor parameter names
+    return {CONFIG_KEY_MAP.get(k, k): v for k, v in config.items()}
+
+
+def build_model(model_name: str):
+    """Instantiate a classifier from its name and YAML config."""
+    if model_name not in MODELS:
+        raise ValueError(f"Unknown model '{model_name}'. Choose from: {', '.join(MODELS)}")
+    config = load_config(model_name)
+    return MODELS[model_name](**config), config
+
+
+def eval_model(model_name: str):
+    model, config = build_model(model_name)
+
+    pubs = load_publications(DB_PATH, query="SELECT * FROM publications WHERE year < 2024")
     X = pubs.drop("keck_manual", axis=1)
     y = pubs["keck_manual"]
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
+    start = time.time()
     model.train(X_train, y_train)
-
     predictions = model.predict(X_test)
-    return classification_report(y_test, predictions, output_dict=True, zero_division=0), y_test, predictions
+    duration = time.time() - start
+
+    return config, y_test, predictions, duration
 
 
-def summary_statistics(report: dict, y_test, predictions) -> dict:
+def write_results(model_name: str, config: dict, y_test, predictions, duration: float):
+    """Write experiment results to out/experiments/."""
     tn, fp, fn, tp = confusion_matrix(y_test, predictions, labels=[0, 1]).ravel()
-    total = tn + fp + fn + tp
-    return {
-        "accuracy": report["accuracy"],
-        "confusion_matrix": {
-            "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp),
-            "tn_pct": tn / total, "fp_pct": fp / total,
-            "fn_pct": fn / total, "tp_pct": tp / total,
+    accuracy = accuracy_score(y_test, predictions)
+
+    results = {
+        "model": model_name,
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "config": config,
+        "results": {
+            "accuracy": round(accuracy, 4),
+            "confusion_matrix": {
+                "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp),
+            },
         },
+        "duration_seconds": round(duration, 1),
     }
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = OUTPUT_DIR / f"{model_name}.jsonl"
+    with open(out_path, "a") as f:
+        f.write(json.dumps(results) + "\n")
+
+    return results, out_path
 
 
 if __name__ == "__main__":
-    report, y_test, predictions = eval_model()
-    stats = summary_statistics(report, y_test, predictions)
-    cm = stats.pop("confusion_matrix")
-    print(f"accuracy: {stats['accuracy']:.4f}")
-    print(f"confusion matrix: tn={cm['tn']} ({cm['tn_pct']:.1%})  fp={cm['fp']} ({cm['fp_pct']:.1%})  fn={cm['fn']} ({cm['fn_pct']:.1%})  tp={cm['tp']} ({cm['tp_pct']:.1%})")
+    if len(sys.argv) < 2:
+        print(f"Usage: python test_harness.py <model>")
+        print(f"Available models: {', '.join(MODELS)}")
+        sys.exit(1)
+
+    model_name = sys.argv[1]
+    config, y_test, predictions, duration = eval_model(model_name)
+    results, out_path = write_results(model_name, config, y_test, predictions, duration)
+
+    cm = results["results"]["confusion_matrix"]
+    print(f"\n{'='*50}")
+    print(f"Model: {model_name}")
+    print(f"Accuracy: {results['results']['accuracy']:.4f}")
+    print(f"Confusion matrix: tn={cm['tn']}  fp={cm['fp']}  fn={cm['fn']}  tp={cm['tp']}")
+    print(f"Duration: {duration:.1f}s")
+    print(f"Results saved to: {out_path}")

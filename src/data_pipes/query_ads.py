@@ -63,7 +63,7 @@ FIELDS = {
     "aff":                 ("TEXT", True),
     "facility":            ("TEXT", True),
     "simbid":              ("TEXT", True),
-    "full":                ("TEXT", False),
+    "body":                ("TEXT", False),
 }
 
 # Derived from FIELDS

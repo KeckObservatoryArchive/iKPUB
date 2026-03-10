@@ -1,0 +1,16 @@
+transformer:
+  max_length: 512          # 128 = fast, 512 = full
+  epochs: 8                # 2 = fast, 5 = full
+  batch_size: 32           # 32 = fast, 16 = full
+  learning_rate: 2.0e-5
+  dropout: 0.3
+  max_samples: null        # null = use all data
+  freeze_backbone: false    # true = only train MLP head (fast), false = fine-tune all
+
+embedding:
+  epochs: 20
+  batch_size: 32
+  learning_rate: 1.0e-3
+  dropout: 0.3
+
+auto: {}
