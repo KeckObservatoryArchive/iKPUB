@@ -18,10 +18,9 @@ from torch.utils.data import DataLoader, TensorDataset
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
-from .base_kpub_classifier import KPUBClassifier
+from .base_kpub_classifier import KPUBClassifier, ensure_model
 
-PROJECT_ROOT = Path(__file__).parents[2]
-MODEL_NAME = PROJECT_ROOT / "data" / "models" / "all-mpnet-base-v2"
+DEFAULT_HF_MODEL = "allenai-specter"  # alternatives: all-mpnet-base-v2
 
 # ---------------------------------------------------------------------------
 # Classification head
@@ -67,24 +66,24 @@ def compose_text(row: pd.Series) -> str:
     title    = _safe(row.get("title"))
     abstract = _safe(row.get("abstract"))
     keywords = _safe(row.get("keyword"))
-    ack      = _safe(row.get("ack"))
-    facility = _safe(row.get("facility")) # TODO: Remove
-    aff      = _safe(row.get("aff")) # TODO: Check
+    facility = _safe(row.get("facility"))
+    aff      = _safe(row.get("aff"))
+    data     = _safe(row.get("data"))
     # ───────────────────────────────────────────────────────────────────
 
-    parts = []
-    if title:
-        parts.append(f"title: {title}")
-    if abstract:
-        parts.append(f"abstract: {abstract}")
-    if keywords:
-        parts.append(f"keywords: {keywords}")
-    if ack:
-        parts.append(f"acknowledgements: {ack}")
+    parts = [] # Ordered by importance (text will be truncated)
     if facility:
         parts.append(f"facility: {facility}")
+    if abstract:
+        parts.append(f"abstract: {abstract}")
     if aff:
         parts.append(f"affiliations: {aff}")
+    if title:
+        parts.append(f"title: {title}")
+    if data:
+        parts.append(f"data: {data}")
+    if keywords:
+        parts.append(f"keywords: {keywords}")
 
     return " ".join(parts)
 
@@ -109,14 +108,14 @@ class EmbeddingClassifier(KPUBClassifier):
 
     def __init__(
         self,
-        model_name: str | Path = MODEL_NAME,
+        hf_model_name: str = DEFAULT_HF_MODEL,
         epochs: int = 20,
         lr: float = 1e-3,
         batch_size: int = 32,
         dropout: float = 0.3,
         device: str | None = None,
     ):
-        self.model_name = str(model_name)
+        self.hf_model_name = hf_model_name
         self.epochs = epochs
         self.lr = lr
         self.batch_size = batch_size
@@ -130,12 +129,21 @@ class EmbeddingClassifier(KPUBClassifier):
 
     def _get_encoder(self) -> SentenceTransformer:
         if self._encoder is None:
-            self._encoder = SentenceTransformer(self.model_name)
+            model_path = ensure_model(self.hf_model_name)
+            self._encoder = SentenceTransformer(str(model_path))
         return self._encoder
 
     def _embed(self, X: pd.DataFrame) -> np.ndarray:
         """Compose text from features and encode with sentence-transformers."""
-        texts = [extract_relevant_sentences(compose_text(row)) for _, row in tqdm(X.iterrows(), total=len(X), desc="Composing text")]
+        def _compose_with_relevant_first(row):
+            full = compose_text(row)
+            relevant = extract_relevant_sentences(full)
+            # return relevant # Early exit to only see Keck sentences
+            if relevant:
+                return relevant + " " + full
+            return full
+
+        texts = [_compose_with_relevant_first(row) for _, row in tqdm(X.iterrows(), total=len(X), desc="Composing text")]
         encoder = self._get_encoder()
         return encoder.encode(texts, show_progress_bar=True, convert_to_numpy=True)
 

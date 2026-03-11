@@ -1,10 +1,11 @@
 """
-Train a publication classifier by fine-tuning RoBERTa with an MLP
-classification head.
+Train a publication classifier by fine-tuning a HuggingFace transformer
+with an MLP classification head.
 
 The full model (backbone + head) is fine-tuned end-to-end.
 """
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -12,25 +13,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
-from huggingface_hub import snapshot_download
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-from .base_kpub_classifier import KPUBClassifier
+from .base_kpub_classifier import KPUBClassifier, ensure_model
 from .embedding import compose_text
 
-PROJECT_ROOT = Path(__file__).parents[2]
-ROBERTA_PATH = PROJECT_ROOT / "data" / "models" / "roberta-base"
-
-
-def ensure_roberta(model_path: Path = ROBERTA_PATH) -> Path:
-    """Download roberta-base to data/models/ if not already present."""
-    if model_path.exists() and any(model_path.iterdir()):
-        return model_path
-    print(f"Downloading roberta-base to {model_path} ...")
-    model_path.mkdir(parents=True, exist_ok=True)
-    snapshot_download("roberta-base", local_dir=str(model_path))
-    print("Download complete.")
-    return model_path
+DEFAULT_HF_MODEL = "roberta-base"
 
 
 # ---------------------------------------------------------------------------
@@ -38,8 +26,8 @@ def ensure_roberta(model_path: Path = ROBERTA_PATH) -> Path:
 # ---------------------------------------------------------------------------
 
 class _ClassificationHead(nn.Module):
-    """Replacement for RobertaClassificationHead. Takes the full sequence
-    hidden states, extracts the [CLS] token, then runs through an MLP: 768 → 256 → 1."""
+    """Custom classification head. Takes the full sequence hidden states,
+    extracts the [CLS] token, then runs through an MLP: hidden_dim → 256 → 1."""
 
     def __init__(self, input_dim: int = 768, dropout: float = 0.3):
         super().__init__()
@@ -48,7 +36,7 @@ class _ClassificationHead(nn.Module):
         self.out_proj = nn.Linear(256, 1)
 
     def forward(self, features: torch.Tensor, **kwargs) -> torch.Tensor:
-        x = features[:, 0, :]  # [CLS] token
+        x = features[:, 0, :] if features.dim() == 3 else features
         x = self.dropout(x)
         x = self.dense(x)
         x = torch.relu(x)
@@ -57,16 +45,39 @@ class _ClassificationHead(nn.Module):
         return x
 
 
+def _get_backbone(model: nn.Module) -> nn.Module:
+    """Return the transformer backbone, regardless of architecture.
+
+    HF names the backbone after the architecture: model.roberta, model.distilbert,
+    model.bert, etc. The classifier head is always a separate attribute.
+    """
+    for name, child in model.named_children():
+        if name != "classifier" and name != "pre_classifier":
+            return child
+    raise ValueError(f"Could not identify backbone in {type(model).__name__}")
+
+
+def _get_classifier_attr(model: nn.Module) -> str:
+    """Return the attribute name HF uses for the classification head.
+
+    Most architectures use 'classifier'; some use 'cls' or 'score'.
+    """
+    for name in ("classifier", "cls", "score"):
+        if hasattr(model, name):
+            return name
+    raise ValueError(f"Could not find classifier head in {type(model).__name__}")
+
+
 # ---------------------------------------------------------------------------
 # Classifier (KPUBClassifier interface)
 # ---------------------------------------------------------------------------
 
 class TransformerClassifier(KPUBClassifier):
-    """Fine-tuned RoBERTa + MLP for publication classification."""
+    """Fine-tuned transformer + MLP for publication classification."""
 
     def __init__(
         self,
-        model_path: str | Path = ROBERTA_PATH,
+        hf_model_name: str = DEFAULT_HF_MODEL,
         max_length: int = 512,
         epochs: int = 5,
         lr: float = 2e-5,
@@ -76,7 +87,7 @@ class TransformerClassifier(KPUBClassifier):
         freeze_backbone: bool = False,
         device: str | None = None,
     ):
-        self.model_path = str(model_path)
+        self.hf_model_name = hf_model_name
         self.max_length = max_length
         self.epochs = epochs
         self.lr = lr
@@ -93,19 +104,21 @@ class TransformerClassifier(KPUBClassifier):
 
     def _load_model(self):
         """Load tokenizer and model, swapping in our custom MLP head."""
-        ensure_roberta(Path(self.model_path))
+        model_path = ensure_model(self.hf_model_name)
 
         if self._tokenizer is None:
-            self._tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+            self._tokenizer = AutoTokenizer.from_pretrained(model_path)
 
         if self._model is None:
             model = AutoModelForSequenceClassification.from_pretrained(
-                self.model_path, num_labels=1, ignore_mismatched_sizes=True,
+                model_path, num_labels=1, ignore_mismatched_sizes=True,
             )
             hidden_dim = model.config.hidden_size
-            model.classifier = _ClassificationHead(input_dim=hidden_dim, dropout=self.dropout)
+            cls_attr = _get_classifier_attr(model)
+            setattr(model, cls_attr, _ClassificationHead(input_dim=hidden_dim, dropout=self.dropout))
             if self.freeze_backbone:
-                for param in model.roberta.parameters():
+                backbone = _get_backbone(model)
+                for param in backbone.parameters():
                     param.requires_grad = False
             self._model = model.to(self.device)
 
@@ -136,7 +149,7 @@ class TransformerClassifier(KPUBClassifier):
     # -- public API ---------------------------------------------------------
 
     def train(self, X_train: pd.DataFrame, y_train: pd.Series) -> None:
-        """Tokenize training data and fine-tune RoBERTa + MLP."""
+        """Tokenize training data and fine-tune the transformer + MLP."""
         self._load_model()
 
         if self.max_samples is not None and len(X_train) > self.max_samples:
@@ -203,3 +216,63 @@ class TransformerClassifier(KPUBClassifier):
 
         preds = torch.cat(preds_list).numpy()
         return pd.Series(preds, index=X_test.index)
+
+    # -- save / load --------------------------------------------------------
+
+    def save(self, path: str | Path) -> Path:
+        """Save the trained model weights and hyperparameters to *path*.
+
+        Creates a directory containing ``model.pt`` and ``meta.json``.
+        Returns the directory path.
+        """
+        if self._model is None:
+            raise RuntimeError("No trained model to save. Call train() first.")
+
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+
+        torch.save(self._model.state_dict(), path / "model.pt")
+
+        meta = {
+            "hf_model_name": self.hf_model_name,
+            "max_length": self.max_length,
+            "epochs": self.epochs,
+            "lr": self.lr,
+            "batch_size": self.batch_size,
+            "dropout": self.dropout,
+            "max_samples": self.max_samples,
+            "freeze_backbone": self.freeze_backbone,
+        }
+        with open(path / "meta.json", "w") as f:
+            json.dump(meta, f, indent=2)
+
+        print(f"Model saved to {path}")
+        return path
+
+    @classmethod
+    def load(cls, path: str | Path) -> "TransformerClassifier":
+        """Load a previously saved model from *path*.
+
+        Rebuilds the architecture from ``meta.json`` and loads weights
+        from ``model.pt``.
+        """
+        path = Path(path)
+        with open(path / "meta.json") as f:
+            meta = json.load(f)
+
+        instance = cls(
+            hf_model_name=meta["hf_model_name"],
+            max_length=meta["max_length"],
+            epochs=meta["epochs"],
+            lr=meta["lr"],
+            batch_size=meta["batch_size"],
+            dropout=meta["dropout"],
+            max_samples=meta["max_samples"],
+            freeze_backbone=meta["freeze_backbone"],
+        )
+        instance._load_model()
+        instance._model.load_state_dict(torch.load(path / "model.pt", map_location=instance.device))
+        instance._model.eval()
+
+        print(f"Model loaded from {path}")
+        return instance

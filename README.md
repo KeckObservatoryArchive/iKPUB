@@ -10,3 +10,11 @@ install modules in development mode using
 pip install -e .
 ```
 
+
+Note:
+- Add full-text
+- Optimize trasnformer training 
+    - Try BigBird
+    - max length, epochs, large model
+- Optimize current input
+- Add full data

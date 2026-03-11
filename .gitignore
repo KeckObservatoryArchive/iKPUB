@@ -21,3 +21,4 @@ out/experiments/**
 
 notebooks/
 .archive
+.DS_Store

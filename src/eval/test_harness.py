@@ -1,6 +1,6 @@
 # Standard Library
+import argparse
 import json
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -50,21 +50,30 @@ def build_model(model_name: str):
     return MODELS[model_name](**config), config
 
 
-def eval_model(model_name: str):
-    model, config = build_model(model_name)
+SAVE_DIR = PROJECT_ROOT / "data" / "models" / "trained"
 
-    pubs = load_publications(DB_PATH, query="SELECT * FROM publications WHERE year < 2024")
+
+def eval_model(model_name: str, load_path: str | None = None):
+    pubs = load_publications(DB_PATH, query="SELECT * FROM publications WHERE year < 2024 and year > 2000")
     X = pubs.drop("keck_manual", axis=1)
     y = pubs["keck_manual"]
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    start = time.time()
-    model.train(X_train, y_train)
-    predictions = model.predict(X_test)
-    duration = time.time() - start
+    if load_path is not None:
+        model = TransformerClassifier.load(load_path)
+        config = load_config(model_name)
+        start = time.time()
+        predictions = model.predict(X_test)
+        duration = time.time() - start
+    else:
+        model, config = build_model(model_name)
+        start = time.time()
+        model.train(X_train, y_train)
+        predictions = model.predict(X_test)
+        duration = time.time() - start
 
-    return config, y_test, predictions, duration
+    return model, config, y_test, predictions, duration
 
 
 def write_results(model_name: str, config: dict, y_test, predictions, duration: float):
@@ -94,18 +103,23 @@ def write_results(model_name: str, config: dict, y_test, predictions, duration: 
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(f"Usage: python test_harness.py <model>")
-        print(f"Available models: {', '.join(MODELS)}")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Evaluate a KPUB classifier")
+    parser.add_argument("model", choices=MODELS.keys(), help="model to evaluate")
+    parser.add_argument("--save", action="store_true", help="save the trained model after evaluation")
+    parser.add_argument("--load", metavar="PATH", help="load a saved model instead of training")
+    args = parser.parse_args()
 
-    model_name = sys.argv[1]
-    config, y_test, predictions, duration = eval_model(model_name)
-    results, out_path = write_results(model_name, config, y_test, predictions, duration)
+    model, config, y_test, predictions, duration = eval_model(args.model, load_path=args.load)
+    results, out_path = write_results(args.model, config, y_test, predictions, duration)
+
+    if args.save:
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        save_path = SAVE_DIR / f"{args.model}_{timestamp}"
+        model.save(save_path)
 
     cm = results["results"]["confusion_matrix"]
     print(f"\n{'='*50}")
-    print(f"Model: {model_name}")
+    print(f"Model: {args.model}")
     print(f"Accuracy: {results['results']['accuracy']:.4f}")
     print(f"Confusion matrix: tn={cm['tn']}  fp={cm['fp']}  fn={cm['fn']}  tp={cm['tp']}")
     print(f"Duration: {duration:.1f}s")
