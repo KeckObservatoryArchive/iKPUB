@@ -9,7 +9,9 @@ wheels/
 # Virtual environments
 .venv
 .env
+
 config/models.yaml
+config/queue/**
 
 # Data
 data/proposals/**

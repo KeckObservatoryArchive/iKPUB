@@ -10,11 +10,9 @@ install modules in development mode using
 pip install -e .
 ```
 
+## Setup for query_ads.py
 
-Note:
-- Add full-text
-- Optimize trasnformer training 
-    - Try BigBird
-    - max length, epochs, large model
-- Optimize current input
-- Add full data
+1. Create .env at root with ADS_TOKEN
+2. Create SQLite database at data/pubs/kpub.db
+
+Run query_ads.py to populate table `publications`

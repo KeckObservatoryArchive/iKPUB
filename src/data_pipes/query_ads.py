@@ -69,7 +69,7 @@ FL = list(FIELDS.keys())
 ARRAY_FIELDS = {name for name, (_, is_array) in FIELDS.items() if is_array}
 COLUMNS = list(FIELDS.keys())
 
-TABLE = "publications"
+TABLE = "test_publications"
 
 ROWS = 2000
 PROJECT_ROOT = Path(__file__).parents[2]
