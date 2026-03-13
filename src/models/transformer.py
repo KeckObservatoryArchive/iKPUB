@@ -85,6 +85,7 @@ class TransformerClassifier(KPUBClassifier):
         dropout: float = 0.3,
         max_samples: int | None = None,
         freeze_backbone: bool = False,
+        extraction_mode: str = "sentence",
         device: str | None = None,
     ):
         self.hf_model_name = hf_model_name
@@ -95,6 +96,7 @@ class TransformerClassifier(KPUBClassifier):
         self.dropout = dropout
         self.max_samples = max_samples
         self.freeze_backbone = freeze_backbone
+        self.extraction_mode = extraction_mode
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self._tokenizer = None
@@ -124,7 +126,7 @@ class TransformerClassifier(KPUBClassifier):
 
     def _tokenize(self, X: pd.DataFrame) -> dict[str, torch.Tensor]:
         """Compose text from features and tokenize in batches."""
-        texts = [compose_text(row) for _, row in tqdm(X.iterrows(), total=len(X), desc="Composing text")]
+        texts = [compose_text(row, extraction_mode=self.extraction_mode) for _, row in tqdm(X.iterrows(), total=len(X), desc="Composing text")]
 
         all_input_ids = []
         all_attention_masks = []
@@ -242,6 +244,7 @@ class TransformerClassifier(KPUBClassifier):
             "dropout": self.dropout,
             "max_samples": self.max_samples,
             "freeze_backbone": self.freeze_backbone,
+            "extraction_mode": self.extraction_mode,
         }
         with open(path / "meta.json", "w") as f:
             json.dump(meta, f, indent=2)
@@ -269,6 +272,7 @@ class TransformerClassifier(KPUBClassifier):
             dropout=meta["dropout"],
             max_samples=meta["max_samples"],
             freeze_backbone=meta["freeze_backbone"],
+            extraction_mode=meta.get("extraction_mode", "sentence"),
         )
         instance._load_model()
         instance._model.load_state_dict(torch.load(path / "model.pt", map_location=instance.device))

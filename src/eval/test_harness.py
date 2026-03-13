@@ -54,7 +54,7 @@ SAVE_DIR = PROJECT_ROOT / "data" / "models" / "trained"
 
 
 def eval_model(model_name: str, load_path: str | None = None):
-    pubs = load_publications(DB_PATH, query="SELECT * FROM publications WHERE year < 2024 and year > 2000")
+    pubs = load_publications(DB_PATH, query="SELECT * FROM publications WHERE year < 2024 and year > 2021")
     X = pubs.drop("keck_manual", axis=1)
     y = pubs["keck_manual"]
 

@@ -1,51 +1,40 @@
 # Standard Library
-import json
-import re
 import sqlite3
 from pathlib import Path
 
 # 3rd Party
-from sentence_transformers import SentenceTransformer
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).parents[2]
-
-# Embedding model — swap and re-run to experiment
-MODEL_NAME = PROJECT_ROOT / "data" / "models" / "all-mpnet-base-v2"
-# MODEL_NAME = "malteos/scincl"          # Citation-graph trained, scientific papers
-# MODEL_NAME = "allenai/specter2_base"   # SPECTER2 base (no adapter); CLS pooling mismatch
 
 def load_publications(db_path: str, query: str = "SELECT * FROM publications") -> pd.DataFrame:
     """Load publications from a SQLite database into a DataFrame."""
     with sqlite3.connect(db_path) as con:
         return pd.read_sql(query, con)
 
-def clean_authors(authors_str: str) -> str:
-    """Lowercase and strip non-alphabetic punctuation from an author string."""
-    if not isinstance(authors_str, str):
-        return ""
-    cleaned = re.sub(r"[^a-z,\s\-]", "", authors_str.lower())
-    return re.sub(r"\s*,\s*", ", ", cleaned).strip()
-
-def embed(df: pd.DataFrame, model_name: str = MODEL_NAME) -> pd.DataFrame:
+def load_full_text(full_text_dir: Path) -> pd.DataFrame:
     """
-    Add 'authors_clean' and 'embedding' columns to df.
+    Load full-text files from all {year}_{count} subdirectories under full_text_dir.
 
-    Expects columns: title, abstract.
-    Returns the same DataFrame with 'embedding' appended.
+    Each subdirectory is expected to follow the naming pattern '{year}_{count}'.
+    Each .txt file inside is named by bibcode and contains the full text.
+    Returns a DataFrame with columns: bibcode, full.
     """
-    model = SentenceTransformer(str(model_name))
+    records = []
+    for subdir in sorted(full_text_dir.iterdir()):
+        if not subdir.is_dir():
+            continue
+        parts = subdir.name.split("_")
+        if len(parts) != 2 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        year, count = parts
+        txt_files = sorted(subdir.glob("*.txt"))
+        if len(txt_files) != int(count):
+            print(f"Warning: {subdir.name} expects {count} files but found {len(txt_files)}")
+        for f in txt_files:
+            records.append({"bibcode": f.stem, "full": f.read_text(encoding="utf-8")})
+    return pd.DataFrame(records)
 
-    # Concatenate title and abstract; [SEP] is the separator scincl was trained on.
-    # For all-mpnet-base-v2 this is benign but can be swapped to a space if preferred.
-    texts = [
-        f"{row['title'] or ''} [SEP] {row['abstract'] or ''}".strip()
-        for _, row in df.iterrows()
-    ]
-    df = df.copy()
-    df["embedding"] = model.encode(texts, show_progress_bar=True).tolist()
-
-    return df
 
 def merge_manual(df: pd.DataFrame, manual: pd.DataFrame) -> pd.DataFrame:
     """
@@ -57,35 +46,35 @@ def merge_manual(df: pd.DataFrame, manual: pd.DataFrame) -> pd.DataFrame:
     df["keck_manual"] = df["bibcode"].isin(manual["BIBCODE"])
     return df
 
-def load_pubs(db_path: str, manual: pd.DataFrame, query: str = "SELECT * FROM publications") -> pd.DataFrame:
-    """Load, clean, embed, and label publications end to end."""
+def merge_full_text(df: pd.DataFrame, full_text_dir: Path) -> pd.DataFrame:
+    """Left-join full text onto publications by bibcode."""
+    full = load_full_text(full_text_dir)
+    return df.merge(full, on="bibcode", how="left")
+
+def load_pubs(db_path: str, manual: pd.DataFrame, full_text_dir: Path = None, query: str = "SELECT * FROM publications") -> pd.DataFrame:
+    """Load, label, and merge full text for publications."""
     df = load_publications(db_path, query)
-    df["authors_clean"] = df["author"].apply(clean_authors)
     df = merge_manual(df, manual)
-    df = embed(df)
+    if full_text_dir is not None:
+        df = merge_full_text(df, full_text_dir)
     return df
 
 
 if __name__ == "__main__":
     db_path = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
     manual_db_path = PROJECT_ROOT / "data" / "pubs" / "manual_kpub.db"
+    full_text_dir = PROJECT_ROOT / "data" / "pubs" / "full_text"
 
     # Load
     df = load_publications(str(db_path))
-
-    # Clean authors
-    df["authors_clean"] = df["author"].apply(clean_authors)
 
     # Keck manual labels from manual_kpub.db
     with sqlite3.connect(str(manual_db_path)) as con:
         manual = pd.read_sql("SELECT bibcode FROM pubs WHERE mission = 'keck'", con)
     df["keck_manual"] = df["bibcode"].isin(manual["bibcode"])
 
-    # Embeddings
-    df = embed(df)
-
-    # Serialize embeddings to JSON strings for SQLite
-    df["embedding"] = df["embedding"].apply(json.dumps)
+    # Full text
+    df = merge_full_text(df, full_text_dir)
 
     # Write back
     with sqlite3.connect(str(db_path)) as con:

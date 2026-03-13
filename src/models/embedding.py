@@ -55,48 +55,73 @@ def _safe(value) -> str:
         return ""
     return str(value).strip()
 
+def _extract_relevant_sentences(text: str, terms: list[str] = ["keck"],
+                                mode: str = "sentence", window: int = 24) -> str:
+    """Extract text around occurrences of the given terms.
 
-def compose_text(row: pd.Series) -> str:
+    Parameters
+    ----------
+    text : str
+        Source text to search.
+    terms : list[str]
+        Keywords to match (case-insensitive).
+    mode : str
+        "sentence" — return whole sentences containing a match.
+        "window"   — return a fixed token window around each match.
+    window : int
+        Number of tokens to include on each side of the keyword (only used
+        when mode="window").
+    """
+    pattern = re.compile("|".join(re.escape(t) for t in terms), re.IGNORECASE)
+
+    if mode == "sentence":
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        return " ".join(s for s in sentences if pattern.search(s))
+
+    if mode == "window":
+        tokens = text.split()
+        seen: set[int] = set()
+        snippets: list[str] = []
+        for i, tok in enumerate(tokens):
+            if pattern.search(tok):
+                start = max(0, i - window)
+                end = min(len(tokens), i + window + 1)
+                span = range(start, end)
+                if not seen.intersection(span):
+                    snippets.append(" ".join(tokens[start:end]))
+                seen.update(span)
+        return " ".join(snippets)
+
+    raise ValueError(f"Unknown extraction mode: {mode!r}")
+
+def compose_text(row: pd.Series, extraction_mode: str = "sentence") -> str:
     """Compose the text that will be fed to the embedding model.
 
     Each field is labelled so the transformer can distinguish the source.
     Edit this function to change which publication features are embedded.
     """
     # ── fields used for embedding ──────────────────────────────────────
+    full     = _safe(row.get("full"))
     title    = _safe(row.get("title"))
     abstract = _safe(row.get("abstract"))
-    keywords = _safe(row.get("keyword"))
     facility = _safe(row.get("facility"))
     aff      = _safe(row.get("aff"))
-    data     = _safe(row.get("data"))
     # ───────────────────────────────────────────────────────────────────
 
     parts = [] # Ordered by importance (text will be truncated)
     if facility:
-        parts.append(f"facility: {facility}")
+        parts.append(f"FACILITY: {facility}")
+    if full:
+        keck_sentences = _extract_relevant_sentences(full, mode=extraction_mode)
+        parts.append(f"FULL: {keck_sentences}")
     if abstract:
-        parts.append(f"abstract: {abstract}")
+        parts.append(f"ABSTRACT: {abstract}")
     if aff:
-        parts.append(f"affiliations: {aff}")
+        parts.append(f"AFFILIATIONS: {aff}")
     if title:
-        parts.append(f"title: {title}")
-    if data:
-        parts.append(f"data: {data}")
-    if keywords:
-        parts.append(f"keywords: {keywords}")
+        parts.append(f"TITLE: {title}")
 
     return " ".join(parts)
-
-
-def extract_relevant_sentences(text: str, terms: list[str] = ["keck"]) -> str:
-    """Extract only the sentences containing any of the given terms.
-
-    Splits on sentence boundaries and returns matching sentences joined together.
-    Case-insensitive matching.
-    """
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    pattern = re.compile("|".join(re.escape(t) for t in terms), re.IGNORECASE)
-    return " ".join(s for s in sentences if pattern.search(s))
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +138,7 @@ class EmbeddingClassifier(KPUBClassifier):
         lr: float = 1e-3,
         batch_size: int = 32,
         dropout: float = 0.3,
+        extraction_mode: str = "sentence",
         device: str | None = None,
     ):
         self.hf_model_name = hf_model_name
@@ -120,6 +146,7 @@ class EmbeddingClassifier(KPUBClassifier):
         self.lr = lr
         self.batch_size = batch_size
         self.dropout = dropout
+        self.extraction_mode = extraction_mode
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
         self._encoder: SentenceTransformer | None = None
@@ -136,9 +163,8 @@ class EmbeddingClassifier(KPUBClassifier):
     def _embed(self, X: pd.DataFrame) -> np.ndarray:
         """Compose text from features and encode with sentence-transformers."""
         def _compose_with_relevant_first(row):
-            full = compose_text(row)
-            relevant = extract_relevant_sentences(full)
-            # return relevant # Early exit to only see Keck sentences
+            full = compose_text(row, extraction_mode=self.extraction_mode)
+            relevant = _extract_relevant_sentences(full, mode=self.extraction_mode)
             if relevant:
                 return relevant + " " + full
             return full
