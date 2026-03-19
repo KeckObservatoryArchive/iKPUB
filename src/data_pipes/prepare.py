@@ -1,4 +1,5 @@
 # Standard Library
+import argparse
 import sqlite3
 from pathlib import Path
 
@@ -54,17 +55,28 @@ def load_pubs(db_path: str, manual: pd.DataFrame, full_text_dir: Path = None, qu
     return df
 
 
+MANUAL_LABEL_QUERIES = {
+    "publications": "SELECT bibcode FROM pubs WHERE mission = 'keck'",
+    "koa": "SELECT bibcode FROM koa",
+}
+
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Prepare publications with labels and full text")
+    parser.add_argument("--table", choices=MANUAL_LABEL_QUERIES.keys(), default="publications",
+                        help="table to prepare (default: publications)")
+    args = parser.parse_args()
+
     db_path = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
     manual_db_path = PROJECT_ROOT / "data" / "pubs" / "manual_kpub.db"
     full_text_dir = PROJECT_ROOT / "data" / "pubs" / "full_text"
 
     # Load
-    df = load_publications(str(db_path))
+    df = load_publications(str(db_path), f"SELECT * FROM {args.table}")
 
     # Keck manual labels from manual_kpub.db
     with sqlite3.connect(str(manual_db_path)) as con:
-        manual = pd.read_sql("SELECT bibcode FROM pubs WHERE mission = 'keck'", con)
+        manual = pd.read_sql(MANUAL_LABEL_QUERIES[args.table], con)
     df["keck_manual"] = df["bibcode"].isin(manual["bibcode"])
 
     # Full text
@@ -72,6 +84,6 @@ if __name__ == "__main__":
 
     # Write back
     with sqlite3.connect(str(db_path)) as con:
-        df.to_sql("publications", con, if_exists="replace", index=False)
+        df.to_sql(args.table, con, if_exists="replace", index=False)
 
-    print(f"Preprocessed {len(df)} publications → {db_path}")
+    print(f"Preprocessed {len(df)} {args.table} → {db_path}")

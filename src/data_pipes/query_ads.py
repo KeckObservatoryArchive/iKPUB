@@ -1,5 +1,5 @@
 """
-Query ads for publications. Change the query using the constants at the top of this file.
+Query ads for publications. Select a query profile with --query (default: keck).
 """
 
 import argparse
@@ -12,12 +12,40 @@ from pathlib import Path
 import requests
 import dotenv
 
-# Query 0 - Get all papers that say "Keck"
-Q = "*:*"
-BASE_FQ = ["collection:astronomy", "full:Keck", "property:refereed"]
+# ---------------------------------------------------------------------------
+# Query profiles
+# ---------------------------------------------------------------------------
+QUERY_PROFILES = {
+    "keck": {
+        "q": "*:*",
+        "base_fq": ["collection:astronomy", "full:Keck", "property:refereed"],
+        "fl": None,  # None = use all FIELDS
+        "sort": None,
+        "hl": None,
+    },
+    "koa": {
+        "q": (
+            'ack:"Keck Observatory Archive"'
+            ' OR body:("archive" NEAR5 ("Keck" OR "HIRES" OR "ESI" OR "NIRC2"'
+            ' OR "DEIMOS" OR "OSIRIS" OR "NIRSPEC" OR "NIRC" OR "LRIS"'
+            ' OR "MOSFIRE" OR "LWS" OR "NIRES" OR "KCWI" OR "KPF" OR "KCRM"))'
+        ),
+        "base_fq": ["collection:astronomy", "property:article", "property:refereed"],
+        "fl": None,
+        "sort": "bibcode desc",
+        "hl": {
+            "hl": "true",
+            "hl.fl": "body,ack",
+            "hl.snippets": 4,
+            "hl.maxAnalyzedChars": 150000,
+        },
+    },
+}
 
+# ---------------------------------------------------------------------------
 # Single source of truth: field_name → (sqlite_type, is_array)
 # Add/remove fields here — everything else adapts automatically.
+# ---------------------------------------------------------------------------
 FIELDS = {
     "bibcode":             ("TEXT PRIMARY KEY", False),
     "date":                ("TEXT", False),
@@ -62,33 +90,39 @@ FIELDS = {
     "aff":                 ("TEXT", True),
     "facility":            ("TEXT", True),
     "simbid":              ("TEXT", True),
+    "ack":                 ("TEXT", False),
 }
 
 # Derived from FIELDS
-FL = list(FIELDS.keys())
 ARRAY_FIELDS = {name for name, (_, is_array) in FIELDS.items() if is_array}
 COLUMNS = list(FIELDS.keys())
 
-TABLE = "links_table"
+TABLE = "koa"
 
 ROWS = 2000
 PROJECT_ROOT = Path(__file__).parents[2]
 DB_PATH = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
 
 
-def query_ads_year(year: int, headers: dict) -> list[dict]:
+def query_ads_year(year: int, profile: dict, headers: dict) -> list[dict]:
     """Query ADS for a single year and return the docs."""
     base_url = "https://api.adsabs.harvard.edu/v1/search/query"
-    fq = [f"year:{year}"] + BASE_FQ
+    fl = profile["fl"] or list(FIELDS.keys())
+    fq = [f"year:{year}"] + profile["base_fq"]
     params = {
-        "q": Q,
+        "q": profile["q"],
         "fq": fq,
-        "fl": ",".join(FL),
+        "fl": ",".join(fl),
         "rows": ROWS,
     }
+    if profile["sort"]:
+        params["sort"] = profile["sort"]
+    if profile["hl"]:
+        params.update(profile["hl"])
     response = requests.get(base_url, params=params, headers=headers)
     response.raise_for_status()
-    docs = response.json()["response"]["docs"]
+    data = response.json()
+    docs = data["response"]["docs"]
     print(f"  {year}: {len(docs)} records")
     return docs
 
@@ -126,15 +160,18 @@ def write_to_db(docs: list[dict]) -> None:
 def main():
     current_year = datetime.now().year
     parser = argparse.ArgumentParser(description="Query ADS for Keck publications")
+    parser.add_argument("--query", choices=QUERY_PROFILES.keys(), default="keck",
+                        help="query profile to use (default: keck)")
     parser.add_argument("--start-year", type=int, default=current_year, help="first year to query (default: current year)")
     parser.add_argument("--end-year", type=int, default=current_year, help="last year to query (default: current year)")
     args = parser.parse_args()
 
+    profile = QUERY_PROFILES[args.query]
     headers = {"Authorization": f"Bearer {dotenv.get_key('.env', 'ADS_TOKEN')}"}
 
     all_docs = []
     for year in range(args.start_year, args.end_year + 1):
-        all_docs.extend(query_ads_year(year, headers))
+        all_docs.extend(query_ads_year(year, profile, headers))
 
     write_to_db(all_docs)
     print(f"Wrote {len(all_docs)} records to {DB_PATH}")

@@ -11,7 +11,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, accuracy_score
 
 # Local
-from data_pipes.preprocess import load_publications
+from src.data_pipes.prepare import load_publications
 from models.transformer import TransformerClassifier
 from models.embedding import EmbeddingClassifier
 from models.auto import AutoClassifier
