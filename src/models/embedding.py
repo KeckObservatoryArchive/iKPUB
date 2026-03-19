@@ -147,7 +147,7 @@ class EmbeddingClassifier(KPUBClassifier):
         self.batch_size = batch_size
         self.dropout = dropout
         self.extraction_mode = extraction_mode
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device or ("mps" if torch.mps.is_available() else "cpu")
 
         self._encoder: SentenceTransformer | None = None
         self._head: _ClassificationHead | None = None

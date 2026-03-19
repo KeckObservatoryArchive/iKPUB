@@ -42,19 +42,21 @@ def load_config(model_name: str) -> dict:
     return {CONFIG_KEY_MAP.get(k, k): v for k, v in config.items()}
 
 
-def build_model(model_name: str):
-    """Instantiate a classifier from its name and YAML config."""
+def build_model(model_name: str, config: dict | None = None):
+    """Instantiate a classifier from its name and config dict (or YAML fallback)."""
     if model_name not in MODELS:
         raise ValueError(f"Unknown model '{model_name}'. Choose from: {', '.join(MODELS)}")
-    config = load_config(model_name)
+    if config is None:
+        config = load_config(model_name)
     return MODELS[model_name](**config), config
 
 
 SAVE_DIR = PROJECT_ROOT / "data" / "models" / "trained"
 
 
-def eval_model(model_name: str, load_path: str | None = None):
-    pubs = load_publications(DB_PATH, query="SELECT * FROM publications WHERE year < 2024 and year > 2021")
+def eval_model(model_name: str, load_path: str | None = None, finetune_path: str | None = None,
+               config: dict | None = None):
+    pubs = load_publications(DB_PATH, query="SELECT * FROM publications WHERE year < 2024 and year > 1999")
     X = pubs.drop("keck_manual", axis=1)
     y = pubs["keck_manual"]
 
@@ -62,12 +64,22 @@ def eval_model(model_name: str, load_path: str | None = None):
 
     if load_path is not None:
         model = TransformerClassifier.load(load_path)
-        config = load_config(model_name)
+        if config is None:
+            config = load_config(model_name)
         start = time.time()
         predictions = model.predict(X_test)
         duration = time.time() - start
+    elif finetune_path is not None:
+        if config is None:
+            config = load_config(model_name)
+        config["load_path"] = finetune_path
+        model = MODELS[model_name](**config)
+        start = time.time()
+        model.train(X_train, y_train)
+        predictions = model.predict(X_test)
+        duration = time.time() - start
     else:
-        model, config = build_model(model_name)
+        model, config = build_model(model_name, config=config)
         start = time.time()
         model.train(X_train, y_train)
         predictions = model.predict(X_test)
@@ -107,9 +119,12 @@ if __name__ == "__main__":
     parser.add_argument("model", choices=MODELS.keys(), help="model to evaluate")
     parser.add_argument("--save", action="store_true", help="save the trained model after evaluation")
     parser.add_argument("--load", metavar="PATH", help="load a saved model instead of training")
+    parser.add_argument("--finetune", metavar="PATH", help="warm-start training from a saved model checkpoint")
     args = parser.parse_args()
 
-    model, config, y_test, predictions, duration = eval_model(args.model, load_path=args.load)
+    model, config, y_test, predictions, duration = eval_model(
+        args.model, load_path=args.load, finetune_path=args.finetune,
+    )
     results, out_path = write_results(args.model, config, y_test, predictions, duration)
 
     if args.save:
