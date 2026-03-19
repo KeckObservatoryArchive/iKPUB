@@ -10,22 +10,20 @@ install modules in development mode using
 pip install -e .
 ```
 
-### Section Specific Setup
-- [Query ADS Setup](#query-ads-setup)
-- [Publication Prep Setup](#publication-prep-setup)
-
 ## 1. Query ADS
 
 ### Query ADS Setup
 
-1. Create .env at project root with ADS_TOKEN
-2. Create a SQLite database at data/pubs/kpub.db
+1. Create `.env` at project root:
+```
+ADS_TOKEN=your_token_here
+```
 
 ### Run Query
 
 Query Publications for KPUB (Manually specify year range)
 ```zsh
-python src/data_pipes/query_ads.py --query kpub --start-year 2000 --end-year 2025
+python src/data_pipes/query_ads.py --query keck --start-year 2000 --end-year 2025
 ```
 
 Query Publications for KOA
@@ -47,7 +45,7 @@ python src/data_pipes/fetch_full_text.py --table koa --start-year 2008 --end-yea
 
 ## 3. Prepare Publications
 
-Add Manual Labels and full text to the kpub SQLite database table
+Label publications with ground-truth bibcodes and merge full text
 
 ### Publication Prep Setup
 
