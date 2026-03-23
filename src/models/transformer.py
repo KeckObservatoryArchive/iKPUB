@@ -17,7 +17,7 @@ from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
 
 from .base_kpub_classifier import KPUBClassifier, ensure_model
-from .embedding import compose_text
+from .embedding import COMPOSE_FN
 
 DEFAULT_HF_MODEL = "roberta-base"
 
@@ -106,6 +106,7 @@ class TransformerClassifier(KPUBClassifier):
         max_samples: int | None = None,
         freeze_backbone: bool = False,
         extraction_mode: str = "sentence",
+        table: str = "publications",
         weight_decay: float = 0.01,
         warmup_ratio: float = 0.0,
         patience: int | None = None,
@@ -122,6 +123,7 @@ class TransformerClassifier(KPUBClassifier):
         self.max_samples = max_samples
         self.freeze_backbone = freeze_backbone
         self.extraction_mode = extraction_mode
+        self.table = table
         self.weight_decay = weight_decay
         self.warmup_ratio = warmup_ratio
         self.patience = patience
@@ -163,7 +165,8 @@ class TransformerClassifier(KPUBClassifier):
 
     def _tokenize(self, X: pd.DataFrame) -> dict[str, torch.Tensor]:
         """Compose text from features and tokenize in batches."""
-        texts = [compose_text(row, extraction_mode=self.extraction_mode) for _, row in tqdm(X.iterrows(), total=len(X), desc="Composing text")]
+        compose_fn = COMPOSE_FN[self.table]
+        texts = [compose_fn(row, extraction_mode=self.extraction_mode) for _, row in tqdm(X.iterrows(), total=len(X), desc="Composing text")]
 
         all_input_ids = []
         all_attention_masks = []

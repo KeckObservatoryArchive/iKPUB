@@ -94,21 +94,18 @@ def _extract_relevant_sentences(text: str, terms: list[str] = ["keck"],
 
     raise ValueError(f"Unknown extraction mode: {mode!r}")
 
-def compose_text(row: pd.Series, extraction_mode: str = "sentence") -> str:
-    """Compose the text that will be fed to the embedding model.
+def compose_keck_text(row: pd.Series, extraction_mode: str = "sentence") -> str:
+    """Compose text for Keck publication classification.
 
-    Each field is labelled so the transformer can distinguish the source.
-    Edit this function to change which publication features are embedded.
+    Fields ordered by importance (text will be truncated).
     """
-    # ── fields used for embedding ──────────────────────────────────────
-    full     = _safe(row.get("full"))
-    title    = _safe(row.get("title"))
-    abstract = _safe(row.get("abstract"))
     facility = _safe(row.get("facility"))
+    full     = _safe(row.get("full"))
+    abstract = _safe(row.get("abstract"))
     aff      = _safe(row.get("aff"))
-    # ───────────────────────────────────────────────────────────────────
+    title    = _safe(row.get("title"))
 
-    parts = [] # Ordered by importance (text will be truncated)
+    parts = []
     if facility:
         parts.append(f"FACILITY: {facility}")
     if full:
@@ -122,6 +119,38 @@ def compose_text(row: pd.Series, extraction_mode: str = "sentence") -> str:
         parts.append(f"TITLE: {title}")
 
     return " ".join(parts)
+
+
+def compose_koa_text(row: pd.Series, extraction_mode: str = "sentence") -> str:
+    """Compose text for KOA (Keck Observatory Archive) classification.
+
+    Fields ordered by importance (text will be truncated).
+    """
+    full     = _safe(row.get("full"))
+    abstract = _safe(row.get("abstract"))
+    aff      = _safe(row.get("aff"))
+    title    = _safe(row.get("title"))
+
+    archive_terms = ["archive", "koa"]
+    
+    parts = []
+    if full:
+        archive_sentences = _extract_relevant_sentences(full, terms=archive_terms, mode=extraction_mode)
+        parts.append(f"FULL: {archive_sentences}")
+    if abstract:
+        parts.append(f"ABSTRACT: {abstract}")
+    if aff:
+        parts.append(f"AFFILIATIONS: {aff}")
+    if title:
+        parts.append(f"TITLE: {title}")
+
+    return " ".join(parts)
+
+COMPOSE_FN = {
+    "publications": compose_keck_text,
+    "koa": compose_koa_text,
+    "combined": compose_koa_text,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +168,7 @@ class EmbeddingClassifier(KPUBClassifier):
         batch_size: int = 32,
         dropout: float = 0.3,
         extraction_mode: str = "sentence",
+        table: str = "publications",
         device: str | None = None,
     ):
         self.hf_model_name = hf_model_name
@@ -147,6 +177,7 @@ class EmbeddingClassifier(KPUBClassifier):
         self.batch_size = batch_size
         self.dropout = dropout
         self.extraction_mode = extraction_mode
+        self.table = table
         self.device = device or ("mps" if torch.mps.is_available() else "cpu")
 
         self._encoder: SentenceTransformer | None = None
@@ -162,8 +193,10 @@ class EmbeddingClassifier(KPUBClassifier):
 
     def _embed(self, X: pd.DataFrame) -> np.ndarray:
         """Compose text from features and encode with sentence-transformers."""
+        compose_fn = COMPOSE_FN[self.table]
+
         def _compose_with_relevant_first(row):
-            full = compose_text(row, extraction_mode=self.extraction_mode)
+            full = compose_fn(row, extraction_mode=self.extraction_mode)
             relevant = _extract_relevant_sentences(full, mode=self.extraction_mode)
             if relevant:
                 return relevant + " " + full
