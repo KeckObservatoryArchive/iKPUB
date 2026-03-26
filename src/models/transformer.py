@@ -19,7 +19,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_
 from .base_kpub_classifier import KPUBClassifier, ensure_model
 from .embedding import COMPOSE_FN
 
-DEFAULT_HF_MODEL = "roberta-base"
+DEFAULT_HF_MODEL = "adsabs/astroBERT"
 
 
 # ---------------------------------------------------------------------------

@@ -21,4 +21,19 @@ embedding:
   dropout: 0.3
   extraction_mode: sentence
 
+multi_block:
+  hf_model_name: adsabs/astroBERT
+  max_length: 512
+  epochs: 10
+  batch_size: 8
+  learning_rate: 2.0e-5
+  dropout: 0.3
+  max_samples: null
+  freeze_backbone: false
+  extraction_mode: bm25
+  weight_decay: 0.01
+  warmup_ratio: 0.06
+  patience: 3
+  focal_loss_gamma: 0.0
+
 auto: {}

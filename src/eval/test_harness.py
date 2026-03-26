@@ -35,6 +35,7 @@ from models.transformer import TransformerClassifier
 from models.embedding import EmbeddingClassifier
 from models.auto import AutoClassifier
 from models.setfit import SetFitClassifier
+from models.multi_block import MultiBlockClassifier
 
 PROJECT_ROOT = Path(__file__).parents[2]
 DB_PATH = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
@@ -46,6 +47,7 @@ MODELS = {
     "embedding": EmbeddingClassifier,
     "auto": AutoClassifier,
     "setfit": SetFitClassifier,
+    "multi_block": MultiBlockClassifier,
 }
 
 # Map config keys to constructor param names where they differ

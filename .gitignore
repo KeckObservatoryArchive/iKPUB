@@ -19,7 +19,7 @@ data/pubs/**
 data/coversheets/**
 data/models/**
 
-out/experiments/**
+out/**
 
 notebooks/
 .archive
