@@ -94,15 +94,28 @@ def _holdout_split(pubs, holdout_table: str):
 
 def eval_model(model_name: str, table: str = "publications", load_path: str | None = None,
                finetune_path: str | None = None, config: dict | None = None,
-               holdout_table: str | None = None):
+               holdout_table: str | None = None, eval_table: str | None = None,
+               eval_fraction: float = 1.0):
     pubs = load_publications(DB_PATH, query=f"SELECT * FROM {table} WHERE year < 2024 and year > 1999")
 
-    if holdout_table is not None:
+    if eval_table is not None:
+        eval_pubs = load_publications(DB_PATH, query=f"SELECT * FROM {eval_table} WHERE year < 2024 and year > 1999")
+        eval_pubs = eval_pubs[~eval_pubs["bibcode"].isin(pubs["bibcode"])]
+        X_train = pubs.drop("keck_manual", axis=1)
+        y_train = pubs["keck_manual"]
+        X_test = eval_pubs.drop("keck_manual", axis=1)
+        y_test = eval_pubs["keck_manual"]
+    elif holdout_table is not None:
         X_train, X_test, y_train, y_test = _holdout_split(pubs, holdout_table)
     else:
         X = pubs.drop("keck_manual", axis=1)
         y = pubs["keck_manual"]
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    if eval_fraction < 1.0:
+        X_test, _, y_test, _ = train_test_split(
+            X_test, y_test, train_size=eval_fraction, random_state=42
+        )
 
     if load_path is not None:
         model = TransformerClassifier.load(load_path)
@@ -167,11 +180,16 @@ if __name__ == "__main__":
     parser.add_argument("--finetune", metavar="PATH", help="warm-start training from a saved model checkpoint")
     parser.add_argument("--holdout-table", metavar="TABLE",
                         help="define test set from this table's bibcodes to prevent train/test overlap across tables")
+    parser.add_argument("--eval-table", metavar="TABLE",
+                        help="evaluate on this table instead of splitting --table")
+    parser.add_argument("--eval-fraction", type=float, default=1.0, metavar="FRAC",
+                        help="fraction of eval/test data to use (e.g. 0.2 for 20%%)")
     args = parser.parse_args()
 
     model, config, y_test, predictions, duration = eval_model(
         args.model, table=args.table, load_path=args.load, finetune_path=args.finetune,
-        holdout_table=args.holdout_table,
+        holdout_table=args.holdout_table, eval_table=args.eval_table,
+        eval_fraction=args.eval_fraction,
     )
     results, out_path = write_results(args.model, args.table, config, y_test, predictions, duration)
 

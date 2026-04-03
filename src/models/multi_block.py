@@ -20,6 +20,7 @@ from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warm
 
 from .base_kpub_classifier import KPUBClassifier, ensure_model
 from .embedding import _safe, _extract_relevant_sentences
+from .heads import DeepMLPHead
 
 DEFAULT_HF_MODEL = "adsabs/astroBERT"
 
@@ -70,29 +71,6 @@ def compose_block(row: pd.Series, terms: list[str],
 
 
 # ---------------------------------------------------------------------------
-# Classification head
-# ---------------------------------------------------------------------------
-
-class _MultiBlockHead(nn.Module):
-    """MLP that takes averaged CLS embeddings from all blocks."""
-
-    def __init__(self, input_dim: int, dropout: float = 0.3):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(256, 64),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(64, 1),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
-
-# ---------------------------------------------------------------------------
 # Classifier
 # ---------------------------------------------------------------------------
 
@@ -138,7 +116,7 @@ class MultiBlockClassifier(KPUBClassifier):
 
         self._tokenizer = None
         self._backbone = None
-        self._head: _MultiBlockHead | None = None
+        self._head: DeepMLPHead | None = None
         self._temperature = 1.0
 
     # -- internal helpers ---------------------------------------------------
@@ -159,7 +137,7 @@ class MultiBlockClassifier(KPUBClassifier):
 
         if self._head is None:
             hidden_dim = self._backbone.config.hidden_size
-            self._head = _MultiBlockHead(
+            self._head = DeepMLPHead(
                 input_dim=hidden_dim, dropout=self.dropout,
             )
             self._head.to(self.device)

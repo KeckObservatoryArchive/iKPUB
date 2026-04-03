@@ -157,6 +157,21 @@ wheels = [
 ]
 
 [[package]]
+name = "captum"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "torch" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5b/0b/db1c79ae2496bf61d10d3439e85321d3df3cefc7a9960347f38722049872/captum-0.7.0.tar.gz", hash = "sha256:7ca87d0dc67b3b7589a730b970b9536172a5468e0e31bf8657fdd73abc568a33", size = 1237972, upload-time = "2023-12-05T08:32:07.126Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/76/b21bfd2c35cab2e9a4b68b1977f7488c246c8cffa31e3361ee7610e8b5af/captum-0.7.0-py3-none-any.whl", hash = "sha256:2cbec9aa4b6ec325c2fdf369c1fdabb011017122e2314e2af009496d53a0757c", size = 1330385, upload-time = "2023-12-05T08:32:04.88Z" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.1.4"
 source = { registry = "https://pypi.org/simple" }
@@ -803,6 +818,7 @@ name = "kpub"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "captum" },
     { name = "ipympl" },
     { name = "matplotlib" },
     { name = "nltk" },
@@ -811,6 +827,7 @@ dependencies = [
     { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
     { name = "python-dotenv" },
+    { name = "rank-bm25" },
     { name = "requests" },
     { name = "seaborn" },
     { name = "sentence-transformers" },
@@ -819,6 +836,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "captum", specifier = ">=0.7.0" },
     { name = "ipympl", specifier = ">=0.10.0" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "nltk", specifier = ">=3.9.3" },
@@ -827,6 +845,7 @@ requires-dist = [
     { name = "pgvector", specifier = ">=0.4.2" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.3" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "rank-bm25", specifier = ">=0.2.2" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "sentence-transformers", specifier = ">=5.2.3" },
@@ -1727,6 +1746,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/da/92/1446574745d74df0c92e6aa4a7b0b3130706a4142b2d1a5869f2eaa423c6/pyyaml-6.0.3-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:16249ee61e95f858e83976573de0f5b2893b3677ba71c9dd36b9cf8be9ac6d65", size = 829923, upload-time = "2025-09-25T21:32:54.537Z" },
     { url = "https://files.pythonhosted.org/packages/f0/7a/1c7270340330e575b92f397352af856a8c06f230aa3e76f86b39d01b416a/pyyaml-6.0.3-cp314-cp314t-win_amd64.whl", hash = "sha256:4ad1906908f2f5ae4e5a8ddfce73c320c2a1429ec52eafd27138b7f1cbe341c9", size = 174062, upload-time = "2025-09-25T21:32:55.767Z" },
     { url = "https://files.pythonhosted.org/packages/f1/12/de94a39c2ef588c7e6455cfbe7343d3b2dc9d6b6b2f40c4c6565744c873d/pyyaml-6.0.3-cp314-cp314t-win_arm64.whl", hash = "sha256:ebc55a14a21cb14062aa4162f906cd962b28e2e9ea38f9b4391244cd8de4ae0b", size = 149341, upload-time = "2025-09-25T21:32:56.828Z" },
+]
+
+[[package]]
+name = "rank-bm25"
+version = "0.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fc/0a/f9579384aa017d8b4c15613f86954b92a95a93d641cc849182467cf0bb3b/rank_bm25-0.2.2.tar.gz", hash = "sha256:096ccef76f8188563419aaf384a02f0ea459503fdf77901378d4fd9d87e5e51d", size = 8347, upload-time = "2022-02-16T12:10:52.196Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2a/21/f691fb2613100a62b3fa91e9988c991e9ca5b89ea31c0d3152a3210344f9/rank_bm25-0.2.2-py3-none-any.whl", hash = "sha256:7bd4a95571adadfc271746fa146a4bcfd89c0cf731e49c3d1ad863290adbe8ae", size = 8584, upload-time = "2022-02-16T12:10:50.626Z" },
 ]
 
 [[package]]

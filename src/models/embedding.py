@@ -20,6 +20,7 @@ from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
 from .base_kpub_classifier import KPUBClassifier, ensure_model
+from .heads import DeepMLPHead
 
 DEFAULT_HF_MODEL = "allenai/specter"  # alternatives: all-mpnet-base-v2
 
@@ -36,29 +37,6 @@ def _get_extraction_encoder(model_name: str = DEFAULT_HF_MODEL) -> SentenceTrans
         model_path = ensure_model(model_name)
         _extraction_encoder = SentenceTransformer(str(model_path))
     return _extraction_encoder
-
-# ---------------------------------------------------------------------------
-# Classification head
-# ---------------------------------------------------------------------------
-
-class _ClassificationHead(nn.Module):
-    """Small MLP: 768 → 256 → 64 → 1."""
-
-    def __init__(self, input_dim: int = 768, dropout: float = 0.3):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, 256),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(256, 64),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(64, 1),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
 
 # ---------------------------------------------------------------------------
 # Text composition
@@ -185,8 +163,8 @@ def compose_keck_text(row: pd.Series, extraction_mode: str = "sentence") -> str:
     title    = _safe(row.get("title"))
 
     parts = []
-    if facility:
-        parts.append(f"FACILITY: {facility}")
+    # if facility:
+        # parts.append(f"FACILITY: {facility}")
     if full:
         keck_sentences = _extract_relevant_sentences(full, mode=extraction_mode)
         parts.append(f"FULL: {keck_sentences}")
@@ -229,6 +207,7 @@ def compose_koa_text(row: pd.Series, extraction_mode: str = "sentence") -> str:
 
 COMPOSE_FN = {
     "publications": compose_keck_text,
+    "small": compose_keck_text,
     "koa": compose_koa_text,
     "combined": compose_koa_text,
 }
@@ -262,7 +241,7 @@ class EmbeddingClassifier(KPUBClassifier):
         self.device = device or ("mps" if torch.mps.is_available() else "cpu")
 
         self._encoder: SentenceTransformer | None = None
-        self._head: _ClassificationHead | None = None
+        self._head: DeepMLPHead | None = None
 
     # -- internal helpers ---------------------------------------------------
 
@@ -300,7 +279,7 @@ class EmbeddingClassifier(KPUBClassifier):
         dataset = TensorDataset(X_t, y_t)
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
-        self._head = _ClassificationHead(input_dim=embedding_dim, dropout=self.dropout)
+        self._head = DeepMLPHead(input_dim=embedding_dim, dropout=self.dropout)
         self._head.to(self.device)
         self._head.train()
 
