@@ -1,7 +1,8 @@
 """Batch-predict publication labels and write them to a SQLite table.
 
 Loads a trained LegacyTransformer model, runs inference on publications
-for a given year or year range, and upserts (bibcode, ilabel, confidence)
+for a given year or year range, and writes all publication columns (except
+keck_manual, aff, embedding, full, authors_clean) plus ilabel and confidence
 into a ``predictions`` table.
 
 Usage:
@@ -66,24 +67,16 @@ def main():
 
     probs = model.predict(pubs, return_proba=True)
 
-    results = pd.DataFrame({
-        "bibcode": pubs["bibcode"].values,
-        "ilabel": [prob_to_ilabel(p) for p in probs],
-        "confidence": probs.values,
-    })
+    EXCLUDE_COLS = {"keck_manual", "aff", "embedding", "full", "authors_clean"}
+    keep_cols = [c for c in pubs.columns if c not in EXCLUDE_COLS]
+
+    results = pubs[keep_cols].copy()
+    results["ilabel"] = [prob_to_ilabel(p) for p in probs]
+    results["confidence"] = probs.values
 
     with sqlite3.connect(args.db_path) as con:
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS predictions (
-                bibcode TEXT PRIMARY KEY,
-                ilabel TEXT NOT NULL,
-                confidence REAL NOT NULL
-            )
-        """)
-        con.executemany(
-            "INSERT OR REPLACE INTO predictions (bibcode, ilabel, confidence) VALUES (?, ?, ?)",
-            results.itertuples(index=False, name=None),
-        )
+        con.execute("DROP TABLE IF EXISTS predictions")
+        results.to_sql("predictions", con, index=False)
 
     summary = results["ilabel"].value_counts()
     print(f"\nWrote {len(results)} predictions to {args.db_path}::predictions")
