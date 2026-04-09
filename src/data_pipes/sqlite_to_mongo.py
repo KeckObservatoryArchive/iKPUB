@@ -1,6 +1,6 @@
 """Transfer prediction labels from SQLite to MongoDB.
 
-Reads the predictions table from kpub.db and upserts ilabel + confidence
+Reads the predictions table from kpub.db and upserts ilabel + keck_score
 into MongoDB. Bibcodes already in Mongo get updated; new bibcodes get
 inserted as full documents.
 
@@ -15,13 +15,14 @@ import json
 import sqlite3
 from pathlib import Path
 
-from pymongo import MongoClient, UpdateOne
+from pymongo import UpdateOne
+
+from data_pipes.db_mongo_conn import from_env
 
 PROJECT_ROOT = Path(__file__).parents[2]
 DB_PATH = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
 
-MONGO_URI = "mongodb://localhost:27017"
-MONGO_DB = "mongo_dump"
+MONGO_DB = "kpub"
 MONGO_COLLECTION = "articles"
 
 
@@ -71,8 +72,8 @@ def main():
     print(f"Loaded {len(rows)} predictions from SQLite")
 
     # --- Connect to Mongo and prefetch existing bibcodes ---
-    client = MongoClient(MONGO_URI)
-    col = client[MONGO_DB][MONGO_COLLECTION]
+    connector = from_env(MONGO_DB, MONGO_COLLECTION)
+    col = connector.collection
 
     existing = set(
         d["bibcode"] for d in col.find({}, {"bibcode": 1}) if "bibcode" in d
@@ -91,12 +92,17 @@ def main():
         if bibcode in existing:
             updates.append(UpdateOne(
                 {"bibcode": bibcode},
-                {"$set": {"ilabel": row["ilabel"], "confidence": row["confidence"]}},
+                {"$set": {"ilabel": row["ilabel"], "keck_score": row["keck_score"]}},
             ))
-        else:
+        elif row.get("ilabel") == "keck":
             doc = {k: normalize(v) for k, v in row.items() if v is not None}
             if "year" in doc:
                 doc["year"] = int(doc["year"])
+            if "date" in doc:
+                doc["month"] = int(doc["date"][5:7])
+            doc["affiliation"] = "unknown"
+            doc["_id"] = doc["bibcode"]
+            doc["last_modifier"] = "ikpub"
             inserts.append(doc)
 
     # --- Write to Mongo ---

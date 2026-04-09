@@ -210,6 +210,7 @@ COMPOSE_FN = {
     "small": compose_keck_text,
     "koa": compose_koa_text,
     "combined": compose_koa_text,
+    "autokpub": compose_keck_text,
 }
 
 

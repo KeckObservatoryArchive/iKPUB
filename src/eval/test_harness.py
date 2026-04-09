@@ -30,7 +30,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, accuracy_score
 
 # Local
-from data_pipes.prepare import load_publications
+from data_pipes.prepare import load_publications, load_manual_pubs
 from models.transformer import TransformerClassifier
 from models.embedding import EmbeddingClassifier
 from models.auto import AutoClassifier
@@ -95,22 +95,28 @@ def _holdout_split(pubs, holdout_table: str):
 def eval_model(model_name: str, table: str = "publications", load_path: str | None = None,
                finetune_path: str | None = None, config: dict | None = None,
                holdout_table: str | None = None, eval_table: str | None = None,
-               eval_fraction: float = 1.0):
-    pubs = load_publications(DB_PATH, query=f"SELECT * FROM {table} WHERE year < 2024 and year > 1999")
-
-    if eval_table is not None:
-        eval_pubs = load_publications(DB_PATH, query=f"SELECT * FROM {eval_table} WHERE year < 2024 and year > 1999")
-        eval_pubs = eval_pubs[~eval_pubs["bibcode"].isin(pubs["bibcode"])]
-        X_train = pubs.drop("keck_manual", axis=1)
-        y_train = pubs["keck_manual"]
+               eval_fraction: float = 1.0, eval_db: str | None = None,
+               year_start: int = 2000, year_end: int = 2023):
+    if eval_db is not None:
+        eval_pubs = load_manual_pubs(eval_db, str(DB_PATH), table=table, year_start=year_start, year_end=year_end)
         X_test = eval_pubs.drop("keck_manual", axis=1)
         y_test = eval_pubs["keck_manual"]
-    elif holdout_table is not None:
-        X_train, X_test, y_train, y_test = _holdout_split(pubs, holdout_table)
+        X_train, y_train = None, None
     else:
-        X = pubs.drop("keck_manual", axis=1)
-        y = pubs["keck_manual"]
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        pubs = load_publications(DB_PATH, query=f"SELECT * FROM {table} WHERE year <= {year_end} and year >= {year_start}")
+        if eval_table is not None:
+            eval_pubs = load_publications(DB_PATH, query=f"SELECT * FROM {eval_table} WHERE year <= {year_end} and year >= {year_start}")
+            eval_pubs = eval_pubs[~eval_pubs["bibcode"].isin(pubs["bibcode"])]
+            X_train = pubs.drop("keck_manual", axis=1)
+            y_train = pubs["keck_manual"]
+            X_test = eval_pubs.drop("keck_manual", axis=1)
+            y_test = eval_pubs["keck_manual"]
+        elif holdout_table is not None:
+            X_train, X_test, y_train, y_test = _holdout_split(pubs, holdout_table)
+        else:
+            X = pubs.drop("keck_manual", axis=1)
+            y = pubs["keck_manual"]
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
     if eval_fraction < 1.0:
         X_test, _, y_test, _ = train_test_split(
@@ -118,7 +124,7 @@ def eval_model(model_name: str, table: str = "publications", load_path: str | No
         )
 
     if load_path is not None:
-        model = TransformerClassifier.load(load_path)
+        model = MODELS[model_name].load(load_path)
         if config is None:
             config = load_config(model_name)
         start = time.time()
@@ -184,12 +190,23 @@ if __name__ == "__main__":
                         help="evaluate on this table instead of splitting --table")
     parser.add_argument("--eval-fraction", type=float, default=1.0, metavar="FRAC",
                         help="fraction of eval/test data to use (e.g. 0.2 for 20%%)")
+    parser.add_argument("--eval-db", metavar="PATH",
+                        help="evaluate on data from this database (e.g. data/pubs/manual_kpub.db)")
+    parser.add_argument("--year", metavar="RANGE", default="2000-2023",
+                        help="year or year range, e.g. 2024 or 2020-2024 (default: 2000-2023)")
     args = parser.parse_args()
+
+    if "-" in args.year:
+        y_start, y_end = args.year.split("-", 1)
+        year_start, year_end = int(y_start), int(y_end)
+    else:
+        year_start = year_end = int(args.year)
 
     model, config, y_test, predictions, duration = eval_model(
         args.model, table=args.table, load_path=args.load, finetune_path=args.finetune,
         holdout_table=args.holdout_table, eval_table=args.eval_table,
-        eval_fraction=args.eval_fraction,
+        eval_fraction=args.eval_fraction, eval_db=args.eval_db,
+        year_start=year_start, year_end=year_end,
     )
     results, out_path = write_results(args.model, args.table, config, y_test, predictions, duration)
 

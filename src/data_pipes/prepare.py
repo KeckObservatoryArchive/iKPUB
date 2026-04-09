@@ -13,6 +13,27 @@ def load_publications(db_path: str, query: str = "SELECT * FROM publications") -
     with sqlite3.connect(db_path) as con:
         return pd.read_sql(query, con)
 
+def load_manual_pubs(manual_db_path: str, kpub_db_path: str, table: str = "pubs",
+                     year_start: int = 2000, year_end: int = 2024) -> pd.DataFrame:
+    """Load article data from kpub.db with ground-truth labels from manual_kpub.db.
+
+    Labels come from the manual DB's mission column; article content (abstract,
+    title, aff, full, etc.) comes from kpub.db's publications table.
+    """
+    with sqlite3.connect(manual_db_path) as con:
+        labels = pd.read_sql(
+            f"SELECT bibcode, mission FROM {table} WHERE year >= '{year_start}' AND year <= '{year_end}'",
+            con,
+        )
+    labels["keck_manual"] = labels["mission"] == "keck"
+    labels = labels.drop(columns=["mission"])
+
+    pubs = load_publications(kpub_db_path, "SELECT * FROM publications")
+    pubs = pubs.drop(columns=["keck_manual"], errors="ignore")
+
+    return pubs.merge(labels, on="bibcode", how="inner")
+
+
 def load_full_text(full_text_dir: Path) -> pd.DataFrame:
     """
     Load full-text files from year subdirectories under full_text_dir.
