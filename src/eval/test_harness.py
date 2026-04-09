@@ -6,7 +6,7 @@ for inference, or finetuning from a checkpoint.
 
 Usage:
     python src/eval/test_harness.py transformer --table koa
-    python src/eval/test_harness.py embedding --table publications --save
+    python src/eval/test_harness.py embedding --table keck --save
 
 When training on a table that contains rows from another table (e.g.
 "combined" includes all of "koa"), use --holdout-table to define the test
@@ -30,12 +30,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, accuracy_score
 
 # Local
-from data_pipes.prepare import load_publications, load_manual_pubs
+from data.prepare import load_publications, load_manual_pubs
 from models.transformer import TransformerClassifier
 from models.embedding import EmbeddingClassifier
-from models.auto import AutoClassifier
-from models.setfit import SetFitClassifier
-from models.multi_block import MultiBlockClassifier
+from models.snippet import SnippetClassifier
 
 PROJECT_ROOT = Path(__file__).parents[2]
 DB_PATH = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
@@ -45,9 +43,7 @@ OUTPUT_DIR = PROJECT_ROOT / "out" / "experiments"
 MODELS = {
     "transformer": TransformerClassifier,
     "embedding": EmbeddingClassifier,
-    "auto": AutoClassifier,
-    "setfit": SetFitClassifier,
-    "multi_block": MultiBlockClassifier,
+    "snippet": SnippetClassifier,
 }
 
 # Map config keys to constructor param names where they differ
@@ -65,7 +61,7 @@ def load_config(model_name: str) -> dict:
     return {CONFIG_KEY_MAP.get(k, k): v for k, v in config.items()}
 
 
-def build_model(model_name: str, table: str = "publications", config: dict | None = None):
+def build_model(model_name: str, table: str = "keck", config: dict | None = None):
     """Instantiate a classifier from its name and config dict (or YAML fallback)."""
     if model_name not in MODELS:
         raise ValueError(f"Unknown model '{model_name}'. Choose from: {', '.join(MODELS)}")
@@ -92,7 +88,7 @@ def _holdout_split(pubs, holdout_table: str):
     return X[~is_test], X[is_test], y[~is_test], y[is_test]
 
 
-def eval_model(model_name: str, table: str = "publications", load_path: str | None = None,
+def eval_model(model_name: str, table: str = "keck", load_path: str | None = None,
                finetune_path: str | None = None, config: dict | None = None,
                holdout_table: str | None = None, eval_table: str | None = None,
                eval_fraction: float = 1.0, eval_db: str | None = None,
@@ -180,7 +176,7 @@ def write_results(model_name: str, table: str, config: dict, y_test, predictions
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate a KPUB classifier")
     parser.add_argument("model", choices=MODELS.keys(), help="model to evaluate")
-    parser.add_argument("--table", default="publications", help="DB table to use (default: publications)")
+    parser.add_argument("--table", default="keck", help="DB table to use (default: keck)")
     parser.add_argument("--save", action="store_true", help="save the trained model after evaluation")
     parser.add_argument("--load", metavar="PATH", help="load a saved model instead of training")
     parser.add_argument("--finetune", metavar="PATH", help="warm-start training from a saved model checkpoint")

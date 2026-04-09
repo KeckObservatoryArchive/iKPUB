@@ -1,5 +1,8 @@
-"""
-Query ads for publications. Select a query profile with --query (default: keck).
+"""Query ADS for publications.
+
+Usage:
+    python src/data/query_ads.py --query keck --start-year 2000 --end-year 2025
+    python src/data/query_ads.py --query koa --start-year 2008 --end-year 2025
 """
 
 import argparse
@@ -127,14 +130,14 @@ def query_ads_year(year: int, profile: dict, headers: dict) -> list[dict]:
     return docs
 
 
-def write_to_db(docs: list[dict]) -> None:
+def write_to_db(docs: list[dict], table: str = TABLE) -> None:
     """Write docs to SQLite."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
 
     col_defs = ", ".join(f"{name} {sql_type}" for name, (sql_type, _) in FIELDS.items())
-    cur.execute(f"CREATE TABLE IF NOT EXISTS {TABLE} ({col_defs})")
+    cur.execute(f"CREATE TABLE IF NOT EXISTS {table} ({col_defs})")
 
     placeholders = ", ".join("?" * len(COLUMNS))
     col_list = ", ".join(COLUMNS)
@@ -150,7 +153,7 @@ def write_to_db(docs: list[dict]) -> None:
             else:
                 values.append(val)
         cur.execute(
-            f"INSERT OR REPLACE INTO {TABLE} ({col_list}) VALUES ({placeholders})",
+            f"INSERT OR REPLACE INTO {table} ({col_list}) VALUES ({placeholders})",
             values,
         )
     con.commit()

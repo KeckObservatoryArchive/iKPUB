@@ -1,11 +1,9 @@
-"""
-Rule-based auto classifier for Keck publications.
-Ports the classification logic from kpub.py into a sklearn-compatible interface.
+"""Rule-based snippet classifier for Keck publications.
 
-Classification happens in two layers (mirroring kpub.py):
-  1. _apply_exclusion_rules  -> like update()      : hard excludes (no abstract, proposal bibcodes)
-  2. _find_snippets           -> like add_article() : searches full text fields for keywords;
-                                                      any match → keck, no match → unrelated
+Classification happens in two layers (based on the original kpub.py project):
+  1. _apply_exclusion_rules : hard excludes (no abstract, proposal bibcodes)
+  2. _find_snippets         : searches text fields for keywords;
+                              any match → keck, no match → unrelated
 """
 
 from models.base_kpub_classifier import KPUBClassifier
@@ -47,9 +45,9 @@ DEFAULT_ARCHIVE = [
 BIBCODE_EXCLUSION_PATTERNS = ['.prop.', 'cosp..', '.tmp']
 
 
-class AutoClassifier(KPUBClassifier):
+class SnippetClassifier(KPUBClassifier):
 
-    def __init__(self, instruments=None, acknowledgements=None, archive=None):
+    def __init__(self, instruments=None, acknowledgements=None, archive=None, **kwargs):
         """
         Parameters
         ----------
@@ -94,16 +92,11 @@ class AutoClassifier(KPUBClassifier):
 
 
     # ------------------------------------------------------------------
-    # Layer 1 — Hard exclusions (mirrors update())
+    # Layer 1 — Hard exclusions
     # ------------------------------------------------------------------
 
     def _apply_exclusion_rules(self, row):
-        """
-        Returns True if the article should be hard-excluded before any
-        further classification (no abstract, proposal/cospar/tmp bibcodes).
-
-        Mirrors the exclusion block inside kpub.update().
-        """
+        """Return True if the article should be excluded (no abstract, proposal bibcodes)."""
         abstract = row.get('abstract')
         if not abstract or str(abstract).strip() == '':
             return True
@@ -117,22 +110,14 @@ class AutoClassifier(KPUBClassifier):
 
 
     # ------------------------------------------------------------------
-    # Layer 2 — Snippet search (mirrors add_article())
+    # Layer 2 — Snippet search
     # ------------------------------------------------------------------
 
     def _find_snippets(self, row):
-        """
-        Searches available text fields for instrument names, acknowledgement
-        strings, and archive strings.
+        """Search text fields for instrument, acknowledgement, and archive strings.
 
-        NOTE: In kpub.py this searches the full PDF text. Here we use the ADS
-        metadata fields available in X_test as a proxy: ack, abstract,
-        facility, aff.
-
-        Returns
-        -------
-        dict : {matched_word: {'count': int, 'snippets': [str]}}
-               Empty dict means nothing relevant was found → unrelated.
+        Returns dict of {matched_word: {'count': int, 'snippets': [str]}}.
+        Empty dict → unrelated.
         """
         text_fields = ['ack', 'abstract', 'facility', 'aff']
         combined_text = ' '.join(
@@ -152,10 +137,7 @@ class AutoClassifier(KPUBClassifier):
 
 
     def _find_word_in_text(self, word, text):
-        """
-        Searches for a word/phrase in text, returning context snippets.
-        Mirrors the regex approach in kpub's get_word_match_counts_by_pdf().
-        """
+        """Search for a word/phrase in text, returning context snippets."""
         snippets = []
         pattern = re.compile(
             r'(?:^|[\s/(\-:])' + re.escape(word),

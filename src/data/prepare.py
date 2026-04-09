@@ -1,4 +1,10 @@
-# Standard Library
+"""Load, label, and merge full text for publications in kpub.db.
+
+Usage:
+    python src/data/prepare.py
+    python src/data/prepare.py --table koa
+"""
+
 import argparse
 import sqlite3
 from pathlib import Path
@@ -8,7 +14,7 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).parents[2]
 
-def load_publications(db_path: str, query: str = "SELECT * FROM publications") -> pd.DataFrame:
+def load_publications(db_path: str, query: str = "SELECT * FROM keck") -> pd.DataFrame:
     """Load publications from a SQLite database into a DataFrame."""
     with sqlite3.connect(db_path) as con:
         return pd.read_sql(query, con)
@@ -18,7 +24,7 @@ def load_manual_pubs(manual_db_path: str, kpub_db_path: str, table: str = "pubs"
     """Load article data from kpub.db with ground-truth labels from manual_kpub.db.
 
     Labels come from the manual DB's mission column; article content (abstract,
-    title, aff, full, etc.) comes from kpub.db's publications table.
+    title, aff, full, etc.) comes from kpub.db's keck table.
     """
     with sqlite3.connect(manual_db_path) as con:
         labels = pd.read_sql(
@@ -28,7 +34,7 @@ def load_manual_pubs(manual_db_path: str, kpub_db_path: str, table: str = "pubs"
     labels["keck_manual"] = labels["mission"] == "keck"
     labels = labels.drop(columns=["mission"])
 
-    pubs = load_publications(kpub_db_path, "SELECT * FROM publications")
+    pubs = load_publications(kpub_db_path, "SELECT * FROM keck")
     pubs = pubs.drop(columns=["keck_manual"], errors="ignore")
 
     return pubs.merge(labels, on="bibcode", how="inner")
@@ -67,7 +73,7 @@ def merge_full_text(df: pd.DataFrame, full_text_dir: Path) -> pd.DataFrame:
     full = load_full_text(full_text_dir)
     return df.merge(full, on="bibcode", how="left")
 
-def load_pubs(db_path: str, manual: pd.DataFrame, full_text_dir: Path = None, query: str = "SELECT * FROM publications") -> pd.DataFrame:
+def load_pubs(db_path: str, manual: pd.DataFrame, full_text_dir: Path = None, query: str = "SELECT * FROM keck") -> pd.DataFrame:
     """Load, label, and merge full text for publications."""
     df = load_publications(db_path, query)
     df = merge_manual(df, manual)
@@ -77,15 +83,15 @@ def load_pubs(db_path: str, manual: pd.DataFrame, full_text_dir: Path = None, qu
 
 
 MANUAL_LABEL_QUERIES = {
-    "publications": "SELECT bibcode FROM pubs WHERE mission = 'keck'",
+    "keck": "SELECT bibcode FROM pubs WHERE mission = 'keck'",
     "koa": "SELECT bibcode FROM koa",
 }
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Prepare publications with labels and full text")
-    parser.add_argument("--table", choices=MANUAL_LABEL_QUERIES.keys(), default="publications",
-                        help="table to prepare (default: publications)")
+    parser.add_argument("--table", choices=MANUAL_LABEL_QUERIES.keys(), default="keck",
+                        help="table to prepare (default: keck)")
     args = parser.parse_args()
 
     db_path = PROJECT_ROOT / "data" / "pubs" / "kpub.db"

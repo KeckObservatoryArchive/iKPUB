@@ -20,13 +20,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from data_pipes.prepare import load_publications
+from data.prepare import load_publications
 from models.transformer import TransformerClassifier
 
 PROJECT_ROOT = Path(__file__).parents[2]
 DEFAULT_MODEL = PROJECT_ROOT / "data" / "models" / "trained" / "transformer_2026-04-06_151800"
-# BROAD_MODEL = PROJECT_ROOT / "data" / "models" / "trained" / "transformer_2026-03-17_173704" # For making predictions on broad full:"keck" ads query
-# AUTO_KPUB_MODEL = PROJECT_ROOT / "data" / "models" / "trained" /"transformer_2026-04-06_151800" # For making predictions on narrow ads query from autokpub
 DEFAULT_DB = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
 
 LOWER_THRESHOLD = 0.6
@@ -62,7 +60,7 @@ def main():
     print(f"Loading model from {args.model_path}")
     model = TransformerClassifier.load(args.model_path)
 
-    query = f"SELECT * FROM publications WHERE year >= {year_start} AND year <= {year_end}"
+    query = f"SELECT * FROM keck WHERE year >= {year_start} AND year <= {year_end}"
     pubs = load_publications(args.db_path, query=query)
     print(f"Loaded {len(pubs)} publications for years {year_start}-{year_end}")
 

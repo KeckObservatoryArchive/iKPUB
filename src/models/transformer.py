@@ -17,31 +17,13 @@ from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
 
 from .base_kpub_classifier import KPUBClassifier, ensure_model
-from .embedding import COMPOSE_FN
+from data.compose import COMPOSE_FN
 from .heads import HEADS
 
 DEFAULT_HF_MODEL = "adsabs/astroBERT"
 
 POOLING_MODES = ("cls", "mean")
 
-
-# ---------------------------------------------------------------------------
-# Focal loss (Lin et al. 2017)
-# ---------------------------------------------------------------------------
-
-def _focal_bce_with_logits(logits: torch.Tensor, targets: torch.Tensor, gamma: float) -> torch.Tensor:
-    """Binary focal loss from raw logits.
-
-    Reduces the contribution of well-classified (confident) examples so
-    training focuses on hard/misclassified ones.  When *gamma* = 0 this
-    is identical to ``BCEWithLogitsLoss(reduction='mean')``.
-    """
-    bce = nn.functional.binary_cross_entropy_with_logits(logits, targets, reduction="none")
-    probs = torch.sigmoid(logits)
-    # p_t = probability assigned to the true class
-    p_t = probs * targets + (1 - probs) * (1 - targets)
-    focal_weight = (1 - p_t) ** gamma
-    return (focal_weight * bce).mean()
 
 
 def _pool(hidden_states: torch.Tensor, attention_mask: torch.Tensor, mode: str) -> torch.Tensor:
@@ -71,18 +53,14 @@ class TransformerClassifier(KPUBClassifier):
         max_samples: int | None = None,
         freeze_backbone: bool = False,
         extraction_mode: str = "sentence",
-        table: str = "publications",
+        table: str = "keck",
         weight_decay: float = 0.01,
         warmup_ratio: float = 0.0,
         patience: int | None = None,
-        focal_loss_gamma: float = 0.0,
         head: str = "mlp",
         pooling: str = "cls",
         load_path: str | None = None,
         device: str | None = None,
-        use_lora: bool = False,
-        lora_r: int = 8,
-        lora_alpha: int = 16,
     ):
         if head not in HEADS:
             raise ValueError(f"Unknown head '{head}'. Choose from: {', '.join(HEADS)}")
@@ -103,12 +81,8 @@ class TransformerClassifier(KPUBClassifier):
         self.weight_decay = weight_decay
         self.warmup_ratio = warmup_ratio
         self.patience = patience
-        self.focal_loss_gamma = focal_loss_gamma
         self.load_path = load_path
         self.device = device or ("mps" if torch.mps.is_available() else "cpu")
-        self.use_lora = use_lora
-        self.lora_r = lora_r
-        self.lora_alpha = lora_alpha
 
         self._tokenizer = None
         self._backbone = None
@@ -138,19 +112,7 @@ class TransformerClassifier(KPUBClassifier):
                 self._head.load_state_dict(state_dict["head"])
                 print(f"  Warm-start: loaded weights from {self.load_path}")
 
-            if self.use_lora:
-                from peft import get_peft_model, LoraConfig
-                lora_config = LoraConfig(
-                    r=self.lora_r,
-                    lora_alpha=self.lora_alpha,
-                    target_modules=["query", "value"],
-                    bias="none",
-                )
-                self._backbone = get_peft_model(self._backbone, lora_config)
-                trainable = sum(p.numel() for p in self._backbone.parameters() if p.requires_grad)
-                total = sum(p.numel() for p in self._backbone.parameters())
-                print(f"  LoRA: trainable={trainable:,} / {total:,} ({100*trainable/total:.1f}%)")
-            elif self.freeze_backbone:
+            if self.freeze_backbone:
                 self._backbone.requires_grad_(False)
 
             self._backbone = self._backbone.to(self.device)
@@ -237,12 +199,7 @@ class TransformerClassifier(KPUBClassifier):
         scheduler = get_linear_schedule_with_warmup(
             optimizer, num_warmup_steps=num_warmup, num_training_steps=num_steps,
         )
-        if self.focal_loss_gamma > 0:
-            def criterion(logits, targets):
-                return _focal_bce_with_logits(logits, targets, self.focal_loss_gamma)
-            print(f"  Using focal loss (gamma={self.focal_loss_gamma})")
-        else:
-            criterion = nn.BCEWithLogitsLoss()
+        criterion = nn.BCEWithLogitsLoss()
 
         best_val_loss = float("inf")
         best_weights = None
@@ -390,10 +347,6 @@ class TransformerClassifier(KPUBClassifier):
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
 
-        # Merge LoRA weights into the base model before saving
-        if self.use_lora:
-            self._backbone = self._backbone.merge_and_unload()
-
         torch.save({
             "backbone": self._backbone.state_dict(),
             "head": self._head.state_dict(),
@@ -412,14 +365,10 @@ class TransformerClassifier(KPUBClassifier):
             "weight_decay": self.weight_decay,
             "warmup_ratio": self.warmup_ratio,
             "patience": self.patience,
-            "focal_loss_gamma": self.focal_loss_gamma,
             "head": self.head,
             "pooling": self.pooling,
             "load_path": self.load_path,
             "temperature": self._temperature,
-            "use_lora": self.use_lora,
-            "lora_r": self.lora_r,
-            "lora_alpha": self.lora_alpha,
         }
         with open(path / "meta.json", "w") as f:
             json.dump(meta, f, indent=2)
@@ -453,7 +402,6 @@ class TransformerClassifier(KPUBClassifier):
             max_samples=meta["max_samples"],
             freeze_backbone=meta["freeze_backbone"],
             extraction_mode=meta.get("extraction_mode", "sentence"),
-            focal_loss_gamma=meta.get("focal_loss_gamma", 0.0),
             head=meta.get("head", "mlp"),
             pooling=meta.get("pooling", "cls"),
         )

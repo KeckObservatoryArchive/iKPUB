@@ -1,12 +1,12 @@
-# ADS pipeline to extract content from PDF files
-#
-# No guarantees for:
-# - broken equations
-# - weird column merges
-# - odd hyphenations
-# ...but should be good enough for paper classifications
-#
-# extracting from ~10,000 papers takes est 5 to 15 min
+"""Download PDFs from ADS and extract full text for publications in kpub.db.
+
+Text extraction is imperfect (broken equations, column merges, odd hyphenations)
+but good enough for classification. ~10,000 papers takes ~5-15 min.
+
+Usage:
+    python src/data/fetch_full_text.py --start-year 2000 --end-year 2025
+    python src/data/fetch_full_text.py --table koa --start-year 2008 --end-year 2025
+"""
 
 import os
 import json
@@ -130,7 +130,7 @@ def parse_pdf_urls_from_db(links_data_column):
     return urls
 
 
-def run(year, table="publications"):
+def run(year, table="keck"):
 
     pdf_dir = PDF_BASE / str(year)
     text_dir = TEXT_BASE / str(year)
@@ -196,7 +196,7 @@ def run(year, table="publications"):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Download and extract text from ADS papers")
-    parser.add_argument("--table", default="publications", help="DB table to read from (default: publications)")
+    parser.add_argument("--table", default="keck", help="DB table to read from (default: keck)")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--year", type=int, help="single year to process")
     group.add_argument("--start-year", type=int, help="first year in range")

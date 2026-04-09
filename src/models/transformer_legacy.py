@@ -17,7 +17,7 @@ from tqdm import tqdm
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from .base_kpub_classifier import KPUBClassifier, ensure_model
-from .embedding import COMPOSE_FN
+from data.compose import COMPOSE_FN
 
 DEFAULT_HF_MODEL = "adsabs/astroBERT"
 
@@ -58,7 +58,7 @@ class LegacyTransformerClassifier(KPUBClassifier):
         batch_size: int = 16,
         dropout: float = 0.3,
         extraction_mode: str = "sentence",
-        table: str = "publications",
+        table: str = "keck",
         device: str | None = None,
     ):
         self.hf_model_name = hf_model_name

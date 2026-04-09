@@ -1,68 +1,69 @@
 # iKPUB
 
-Next generation automatic publication classifier for WMKO
+Automatic publication classifier for W. M. Keck Observatory.
 
 ## Setup
 
-install modules in development mode using
-
+Install in development mode:
 ```zsh
 pip install -e .
 ```
 
-## 1. Query ADS
-
-### Query ADS Setup
-
-1. Create `.env` at project root:
+Create `.env` at the project root:
 ```
 ADS_TOKEN=your_token_here
+
+# Only needed for step 4 (MongoDB export)
+MONGO_SERVER=hostname
+MONGO_PORT=27017
+MONGO_USER=username
+MONGO_PWD=password
 ```
 
-### Run Query
+## 1. Ingest Data
 
-Query Publications for KPUB (Manually specify year range)
+Query ADS, fetch full text, and prepare labeled data in one step. Requires `data/pubs/manual_kpub.db` — get a copy from code maintainers.
+
 ```zsh
-python src/data_pipes/query_ads.py --query keck --start-year 2000 --end-year 2025
+python src/data/ingest.py --query keck --start-year 2000 --end-year 2025
+python src/data/ingest.py --query koa --start-year 2008 --end-year 2025
 ```
 
-Query Publications for KOA
+Use `--skip-query` or `--skip-fulltext` to re-run individual stages without repeating earlier ones. The sub-scripts (`query_ads.py`, `fetch_full_text.py`, `prepare.py`) can still be run individually.
+
+## 2. Train / Test
+
+Train a classifier and evaluate on a held-out test set.
+
 ```zsh
-python src/data_pipes/query_ads.py --query koa --start-year 2008 --end-year 2025
+python src/eval/test_harness.py transformer --table keck --save
+python src/eval/test_harness.py embedding --table koa
 ```
 
-## 2. Fetch Full Text
+Available models: `transformer`, `embedding`, `snippet` (rule-based).
 
-Fetch full text for KPUB publications
+Model hyperparameters live in `config/models.yaml` (see `config/models.default.yaml` for defaults). To run a batch of configs:
+
 ```zsh
-python src/data_pipes/fetch_full_text.py --start-year 2000 --end-year 2025
+python src/eval/run_queue.py --save
 ```
 
-Fetch full text for KOA publications
+Queue files go in `config/queue/`.
+
+## 3. Predict Labels
+
+Run a trained model on publications for a year or year range and write predictions to the `predictions` table in `kpub.db`.
+
 ```zsh
-python src/data_pipes/fetch_full_text.py --table koa --start-year 2008 --end-year 2025
+python -m eval.predict_labels 2024
+python -m eval.predict_labels 2020-2024 --model-path data/models/trained/my_model
 ```
 
-## 3. Prepare Publications
+## 4. Export to MongoDB
 
-Label publications with ground-truth bibcodes and merge full text
+Push predictions from SQLite to MongoDB.
 
-### Publication Prep Setup
-
-Get a copy of manual_kpub.db from code maintainers and place it in `data/pubs/manual_kpub.db`
-
-### Run code
-
-Prepare the publications table for KPUB classification with manual labels and full text
 ```zsh
-python src/data_pipes/prepare.py
+python -m data.sqlite_to_mongo
+python -m data.sqlite_to_mongo 2024
 ```
-
-Prepare the koa table for KOA classifications with manual labels and full text
-```zsh
-python src/data_pipes/prepare.py --table koa
-```
-
-## 4. Train/Test Model 
-
-Create 

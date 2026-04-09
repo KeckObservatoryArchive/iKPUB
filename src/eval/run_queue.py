@@ -1,4 +1,9 @@
-"""Run a sequence of model configs from config/queue/ and collect results."""
+"""Run a sequence of model configs from config/queue/ and collect results.
+
+Usage:
+    python src/eval/run_queue.py
+    python src/eval/run_queue.py --save
+"""
 
 import argparse
 import sys

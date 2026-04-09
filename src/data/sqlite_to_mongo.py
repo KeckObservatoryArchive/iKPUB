@@ -5,9 +5,9 @@ into MongoDB. Bibcodes already in Mongo get updated; new bibcodes get
 inserted as full documents.
 
 Usage:
-    python -m data_pipes.sqlite_to_mongo
-    python -m data_pipes.sqlite_to_mongo 2024
-    python -m data_pipes.sqlite_to_mongo 2020-2024
+    python -m data.sqlite_to_mongo
+    python -m data.sqlite_to_mongo 2024
+    python -m data.sqlite_to_mongo 2020-2024
 """
 
 import argparse
@@ -17,7 +17,7 @@ from pathlib import Path
 
 from pymongo import UpdateOne
 
-from data_pipes.db_mongo_conn import from_env
+from data.db_mongo_conn import from_env
 
 PROJECT_ROOT = Path(__file__).parents[2]
 DB_PATH = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
