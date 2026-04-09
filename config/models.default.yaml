@@ -1,16 +1,39 @@
 transformer:
+  hf_model_name: adsabs/astroBERT  # e.g. roberta-base, distilbert-base-uncased, adsabs/astroBERT, answerdotai/ModernBERT-base
   max_length: 512          # 128 = fast, 512 = full
-  epochs: 8                # 2 = fast, 5 = full
+  epochs: 5                # 2 = fast
   batch_size: 32           # 32 = fast, 16 = full
   learning_rate: 2.0e-5
   dropout: 0.3
   max_samples: null        # null = use all data
   freeze_backbone: false    # true = only train MLP head (fast), false = fine-tune all
+  extraction_mode: sentence # sentence or window
+  weight_decay: 0.01
+  warmup_ratio: 0.06
+  patience: 2
+  focal_loss_gamma: 0.0    # 0 = standard BCE, >0 = focal loss (try 1.0–3.0)
 
 embedding:
+  hf_model_name: allenai/specter  # e.g. allenai/specter, all-mpnet-base-v2, nasa-impact/nasa-smd-ibm-st-v2
   epochs: 20
   batch_size: 32
   learning_rate: 1.0e-3
   dropout: 0.3
+  extraction_mode: sentence
+
+multi_block:
+  hf_model_name: adsabs/astroBERT
+  max_length: 512
+  epochs: 10
+  batch_size: 8
+  learning_rate: 2.0e-5
+  dropout: 0.3
+  max_samples: null
+  freeze_backbone: false
+  extraction_mode: bm25
+  weight_decay: 0.01
+  warmup_ratio: 0.06
+  patience: 3
+  focal_loss_gamma: 0.0
 
 auto: {}

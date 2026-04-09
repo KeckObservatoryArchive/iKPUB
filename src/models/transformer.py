@@ -14,59 +14,15 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, get_linear_schedule_with_warmup
+from transformers import AutoModel, AutoTokenizer, get_linear_schedule_with_warmup
 
 from .base_kpub_classifier import KPUBClassifier, ensure_model
-from .embedding import compose_text
+from .embedding import COMPOSE_FN
+from .heads import HEADS
 
-DEFAULT_HF_MODEL = "roberta-base"
+DEFAULT_HF_MODEL = "adsabs/astroBERT"
 
-
-# ---------------------------------------------------------------------------
-# Custom MLP head (replaces HF's default single Linear layer)
-# ---------------------------------------------------------------------------
-
-class _ClassificationHead(nn.Module):
-    """Custom classification head. Takes the full sequence hidden states,
-    extracts the [CLS] token, then runs through an MLP: hidden_dim → 256 → 1."""
-
-    def __init__(self, input_dim: int = 768, dropout: float = 0.3):
-        super().__init__()
-        self.dense = nn.Linear(input_dim, 256)
-        self.dropout = nn.Dropout(dropout)
-        self.out_proj = nn.Linear(256, 1)
-
-    def forward(self, features: torch.Tensor, **kwargs) -> torch.Tensor:
-        x = features[:, 0, :] if features.dim() == 3 else features
-        x = self.dropout(x)
-        x = self.dense(x)
-        x = torch.relu(x)
-        x = self.dropout(x)
-        x = self.out_proj(x)
-        return x
-
-
-def _get_backbone(model: nn.Module) -> nn.Module:
-    """Return the transformer backbone, regardless of architecture.
-
-    HF names the backbone after the architecture: model.roberta, model.distilbert,
-    model.bert, etc. The classifier head is always a separate attribute.
-    """
-    for name, child in model.named_children():
-        if name != "classifier" and name != "pre_classifier":
-            return child
-    raise ValueError(f"Could not identify backbone in {type(model).__name__}")
-
-
-def _get_classifier_attr(model: nn.Module) -> str:
-    """Return the attribute name HF uses for the classification head.
-
-    Most architectures use 'classifier'; some use 'cls' or 'score'.
-    """
-    for name in ("classifier", "cls", "score"):
-        if hasattr(model, name):
-            return name
-    raise ValueError(f"Could not find classifier head in {type(model).__name__}")
+POOLING_MODES = ("cls", "mean")
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +44,15 @@ def _focal_bce_with_logits(logits: torch.Tensor, targets: torch.Tensor, gamma: f
     return (focal_weight * bce).mean()
 
 
+def _pool(hidden_states: torch.Tensor, attention_mask: torch.Tensor, mode: str) -> torch.Tensor:
+    """Reduce (batch, seq, hidden) to (batch, hidden)."""
+    if mode == "mean":
+        mask = attention_mask.unsqueeze(-1)  # (batch, seq, 1)
+        return (hidden_states * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
+    # cls
+    return hidden_states[:, 0, :]
+
+
 # ---------------------------------------------------------------------------
 # Classifier (KPUBClassifier interface)
 # ---------------------------------------------------------------------------
@@ -106,13 +71,25 @@ class TransformerClassifier(KPUBClassifier):
         max_samples: int | None = None,
         freeze_backbone: bool = False,
         extraction_mode: str = "sentence",
+        table: str = "publications",
         weight_decay: float = 0.01,
         warmup_ratio: float = 0.0,
         patience: int | None = None,
         focal_loss_gamma: float = 0.0,
+        head: str = "mlp",
+        pooling: str = "cls",
         load_path: str | None = None,
         device: str | None = None,
+        use_lora: bool = False,
+        lora_r: int = 8,
+        lora_alpha: int = 16,
     ):
+        if head not in HEADS:
+            raise ValueError(f"Unknown head '{head}'. Choose from: {', '.join(HEADS)}")
+        if pooling not in POOLING_MODES:
+            raise ValueError(f"Unknown pooling '{pooling}'. Choose from: {', '.join(POOLING_MODES)}")
+        self.head = head
+        self.pooling = pooling
         self.hf_model_name = hf_model_name
         self.max_length = max_length
         self.epochs = epochs
@@ -122,48 +99,73 @@ class TransformerClassifier(KPUBClassifier):
         self.max_samples = max_samples
         self.freeze_backbone = freeze_backbone
         self.extraction_mode = extraction_mode
+        self.table = table
         self.weight_decay = weight_decay
         self.warmup_ratio = warmup_ratio
         self.patience = patience
         self.focal_loss_gamma = focal_loss_gamma
         self.load_path = load_path
         self.device = device or ("mps" if torch.mps.is_available() else "cpu")
+        self.use_lora = use_lora
+        self.lora_r = lora_r
+        self.lora_alpha = lora_alpha
 
         self._tokenizer = None
-        self._model = None
+        self._backbone = None
+        self._head = None
         self._temperature = 1.0  # learned via post-hoc calibration
 
     # -- internal helpers ---------------------------------------------------
 
     def _load_model(self):
-        """Load tokenizer and model, swapping in our custom MLP head."""
+        """Load tokenizer, backbone, and classification head."""
         model_path = ensure_model(self.hf_model_name)
 
         if self._tokenizer is None:
             self._tokenizer = AutoTokenizer.from_pretrained(model_path)
 
-        if self._model is None:
-            model = AutoModelForSequenceClassification.from_pretrained(
-                model_path, num_labels=1, ignore_mismatched_sizes=True,
-            )
-            hidden_dim = model.config.hidden_size
-            cls_attr = _get_classifier_attr(model)
-            setattr(model, cls_attr, _ClassificationHead(input_dim=hidden_dim, dropout=self.dropout))
+        if self._backbone is None:
+            self._backbone = AutoModel.from_pretrained(model_path)
+            hidden_dim = self._backbone.config.hidden_size
+            head_cls = HEADS[self.head]
+            self._head = head_cls(input_dim=hidden_dim, dropout=self.dropout)
+
             if self.load_path is not None:
                 state_dict = torch.load(
                     Path(self.load_path) / "model.pt", map_location=self.device,
                 )
-                model.load_state_dict(state_dict)
+                self._backbone.load_state_dict(state_dict["backbone"])
+                self._head.load_state_dict(state_dict["head"])
                 print(f"  Warm-start: loaded weights from {self.load_path}")
-            if self.freeze_backbone:
-                backbone = _get_backbone(model)
-                for param in backbone.parameters():
-                    param.requires_grad = False
-            self._model = model.to(self.device)
+
+            if self.use_lora:
+                from peft import get_peft_model, LoraConfig
+                lora_config = LoraConfig(
+                    r=self.lora_r,
+                    lora_alpha=self.lora_alpha,
+                    target_modules=["query", "value"],
+                    bias="none",
+                )
+                self._backbone = get_peft_model(self._backbone, lora_config)
+                trainable = sum(p.numel() for p in self._backbone.parameters() if p.requires_grad)
+                total = sum(p.numel() for p in self._backbone.parameters())
+                print(f"  LoRA: trainable={trainable:,} / {total:,} ({100*trainable/total:.1f}%)")
+            elif self.freeze_backbone:
+                self._backbone.requires_grad_(False)
+
+            self._backbone = self._backbone.to(self.device)
+            self._head = self._head.to(self.device)
+
+    def _forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """Run backbone → pool → head. Returns (batch, 1) logits."""
+        hidden_states = self._backbone(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        pooled = _pool(hidden_states, attention_mask, self.pooling)
+        return self._head(pooled)
 
     def _tokenize(self, X: pd.DataFrame) -> dict[str, torch.Tensor]:
         """Compose text from features and tokenize in batches."""
-        texts = [compose_text(row, extraction_mode=self.extraction_mode) for _, row in tqdm(X.iterrows(), total=len(X), desc="Composing text")]
+        compose_fn = COMPOSE_FN[self.table]
+        texts = [compose_fn(row, extraction_mode=self.extraction_mode) for _, row in tqdm(X.iterrows(), total=len(X), desc="Composing text")]
 
         all_input_ids = []
         all_attention_masks = []
@@ -185,6 +187,15 @@ class TransformerClassifier(KPUBClassifier):
             "attention_mask": torch.cat(all_attention_masks),
         }
 
+    def _parameters(self):
+        """Return all trainable parameters across backbone and head."""
+        for p in self._backbone.parameters():
+            if p.requires_grad:
+                yield p
+        for p in self._head.parameters():
+            if p.requires_grad:
+                yield p
+
     # -- public API ---------------------------------------------------------
 
     def train(self, X_train: pd.DataFrame, y_train: pd.Series) -> None:
@@ -201,21 +212,25 @@ class TransformerClassifier(KPUBClassifier):
         attention_mask = encoded["attention_mask"]
         labels = torch.tensor(y_train.values, dtype=torch.float32).unsqueeze(1)
 
-        # Split off a validation set for early stopping
-        n = len(input_ids)
-        n_val = max(1, int(n * 0.1))
-        indices = torch.randperm(n, generator=torch.Generator().manual_seed(42))
-        val_idx, train_idx = indices[:n_val], indices[n_val:]
+        use_val = self.patience is not None
+        if use_val:
+            n = len(input_ids)
+            n_val = max(1, int(n * 0.1))
+            indices = torch.randperm(n, generator=torch.Generator().manual_seed(42))
+            val_idx, train_idx = indices[:n_val], indices[n_val:]
+            train_dataset = TensorDataset(input_ids[train_idx], attention_mask[train_idx], labels[train_idx])
+            val_dataset = TensorDataset(input_ids[val_idx], attention_mask[val_idx], labels[val_idx])
+            val_loader = DataLoader(val_dataset, batch_size=self.batch_size)
+        else:
+            train_dataset = TensorDataset(input_ids, attention_mask, labels)
 
-        train_dataset = TensorDataset(input_ids[train_idx], attention_mask[train_idx], labels[train_idx])
-        val_dataset = TensorDataset(input_ids[val_idx], attention_mask[val_idx], labels[val_idx])
         loader = DataLoader(train_dataset, batch_size=self.batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=self.batch_size)
 
-        self._model.train()
+        self._backbone.train()
+        self._head.train()
 
         optimizer = torch.optim.AdamW(
-            self._model.parameters(), lr=self.lr, weight_decay=self.weight_decay,
+            self._parameters(), lr=self.lr, weight_decay=self.weight_decay,
         )
         num_steps = len(loader) * self.epochs
         num_warmup = int(num_steps * self.warmup_ratio)
@@ -235,15 +250,16 @@ class TransformerClassifier(KPUBClassifier):
 
         for epoch in range(self.epochs):
             # -- training --
-            self._model.train()
+            self._backbone.train()
+            self._head.train()
             epoch_loss = 0.0
             for ids_batch, mask_batch, y_batch in tqdm(loader, desc=f"Epoch {epoch + 1}/{self.epochs}"):
                 ids_batch = ids_batch.to(self.device)
                 mask_batch = mask_batch.to(self.device)
                 y_batch = y_batch.to(self.device)
 
-                outputs = self._model(input_ids=ids_batch, attention_mask=mask_batch)
-                loss = criterion(outputs.logits, y_batch)
+                logits = self._forward(ids_batch, mask_batch)
+                loss = criterion(logits, y_batch)
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -254,16 +270,21 @@ class TransformerClassifier(KPUBClassifier):
 
             avg_train_loss = epoch_loss / len(train_dataset)
 
+            if not use_val:
+                print(f"  epoch {epoch + 1:>3}/{self.epochs}  train_loss={avg_train_loss:.4f}")
+                continue
+
             # -- validation --
-            self._model.eval()
+            self._backbone.eval()
+            self._head.eval()
             val_loss = 0.0
             with torch.no_grad():
                 for ids_batch, mask_batch, y_batch in val_loader:
                     ids_batch = ids_batch.to(self.device)
                     mask_batch = mask_batch.to(self.device)
                     y_batch = y_batch.to(self.device)
-                    outputs = self._model(input_ids=ids_batch, attention_mask=mask_batch)
-                    val_loss += criterion(outputs.logits, y_batch).item() * ids_batch.size(0)
+                    logits = self._forward(ids_batch, mask_batch)
+                    val_loss += criterion(logits, y_batch).item() * ids_batch.size(0)
             avg_val_loss = val_loss / len(val_dataset)
 
             print(f"  epoch {epoch + 1:>3}/{self.epochs}  train_loss={avg_train_loss:.4f}  val_loss={avg_val_loss:.4f}")
@@ -271,37 +292,40 @@ class TransformerClassifier(KPUBClassifier):
             # -- early stopping --
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
-                best_weights = copy.deepcopy(self._model.state_dict())
+                best_weights = {
+                    "backbone": copy.deepcopy(self._backbone.state_dict()),
+                    "head": copy.deepcopy(self._head.state_dict()),
+                }
                 epochs_without_improvement = 0
             else:
                 epochs_without_improvement += 1
 
-            if self.patience is not None and epochs_without_improvement >= self.patience:
+            if epochs_without_improvement >= self.patience:
                 print(f"  Early stopping: no improvement for {self.patience} epochs")
                 break
 
-        # Restore best weights
+        # Restore best weights and calibrate temperature
         if best_weights is not None:
-            self._model.load_state_dict(best_weights)
+            self._backbone.load_state_dict(best_weights["backbone"])
+            self._head.load_state_dict(best_weights["head"])
             print(f"  Restored best weights (val_loss={best_val_loss:.4f})")
+            self._calibrate_temperature(val_loader)
 
-        # Post-hoc temperature calibration on the validation set
-        self._calibrate_temperature(val_loader, len(val_dataset))
-
-    def _calibrate_temperature(self, val_loader: DataLoader, n_val: int) -> None:
+    def _calibrate_temperature(self, val_loader: DataLoader) -> None:
         """Learn a scalar temperature on the validation set (Guo et al. 2017).
 
         Optimises T to minimise NLL on held-out logits. The learned value is
         stored in ``self._temperature`` and applied in ``predict()``.
         """
-        self._model.eval()
+        self._backbone.eval()
+        self._head.eval()
         all_logits, all_labels = [], []
         with torch.no_grad():
             for ids_batch, mask_batch, y_batch in val_loader:
                 ids_batch = ids_batch.to(self.device)
                 mask_batch = mask_batch.to(self.device)
-                outputs = self._model(input_ids=ids_batch, attention_mask=mask_batch)
-                all_logits.append(outputs.logits.cpu())
+                logits = self._forward(ids_batch, mask_batch)
+                all_logits.append(logits.cpu())
                 all_labels.append(y_batch)
 
         logits = torch.cat(all_logits)   # (n_val, 1)
@@ -327,22 +351,23 @@ class TransformerClassifier(KPUBClassifier):
         If *return_proba* is True, return raw probabilities instead of
         binary 0/1 predictions.
         """
-        if self._model is None:
+        if self._backbone is None:
             raise RuntimeError("Model has not been trained yet. Call train() first.")
 
         encoded = self._tokenize(X_test)
         dataset = TensorDataset(encoded["input_ids"], encoded["attention_mask"])
         loader = DataLoader(dataset, batch_size=self.batch_size)
 
-        self._model.eval()
+        self._backbone.eval()
+        self._head.eval()
         preds_list = []
 
         with torch.no_grad():
             for ids_batch, mask_batch in loader:
                 ids_batch = ids_batch.to(self.device)
                 mask_batch = mask_batch.to(self.device)
-                outputs = self._model(input_ids=ids_batch, attention_mask=mask_batch)
-                probs = torch.sigmoid(outputs.logits / self._temperature).squeeze(1)
+                logits = self._forward(ids_batch, mask_batch)
+                probs = torch.sigmoid(logits / self._temperature).squeeze(1)
                 if return_proba:
                     preds_list.append(probs.cpu())
                 else:
@@ -359,13 +384,20 @@ class TransformerClassifier(KPUBClassifier):
         Creates a directory containing ``model.pt`` and ``meta.json``.
         Returns the directory path.
         """
-        if self._model is None:
+        if self._backbone is None:
             raise RuntimeError("No trained model to save. Call train() first.")
 
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
 
-        torch.save(self._model.state_dict(), path / "model.pt")
+        # Merge LoRA weights into the base model before saving
+        if self.use_lora:
+            self._backbone = self._backbone.merge_and_unload()
+
+        torch.save({
+            "backbone": self._backbone.state_dict(),
+            "head": self._head.state_dict(),
+        }, path / "model.pt")
 
         meta = {
             "hf_model_name": self.hf_model_name,
@@ -381,8 +413,13 @@ class TransformerClassifier(KPUBClassifier):
             "warmup_ratio": self.warmup_ratio,
             "patience": self.patience,
             "focal_loss_gamma": self.focal_loss_gamma,
+            "head": self.head,
+            "pooling": self.pooling,
             "load_path": self.load_path,
             "temperature": self._temperature,
+            "use_lora": self.use_lora,
+            "lora_r": self.lora_r,
+            "lora_alpha": self.lora_alpha,
         }
         with open(path / "meta.json", "w") as f:
             json.dump(meta, f, indent=2)
@@ -412,10 +449,17 @@ class TransformerClassifier(KPUBClassifier):
             freeze_backbone=meta["freeze_backbone"],
             extraction_mode=meta.get("extraction_mode", "sentence"),
             focal_loss_gamma=meta.get("focal_loss_gamma", 0.0),
+            head=meta.get("head", "mlp"),
+            pooling=meta.get("pooling", "cls"),
         )
         instance._load_model()
-        instance._model.load_state_dict(torch.load(path / "model.pt", map_location=instance.device))
-        instance._model.eval()
+
+        state_dict = torch.load(path / "model.pt", map_location=instance.device)
+        instance._backbone.load_state_dict(state_dict["backbone"])
+        instance._head.load_state_dict(state_dict["head"])
+
+        instance._backbone.eval()
+        instance._head.eval()
         instance._temperature = meta.get("temperature", 1.0)
 
         print(f"Model loaded from {path} (T={instance._temperature:.4f})")
