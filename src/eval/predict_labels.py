@@ -41,7 +41,7 @@ PROJECT_ROOT = Path(__file__).parents[2]
 # ── Defaults ────────────────────────────────────────────────────────
 DEFAULT_DB = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
 DEFAULT_TRANSFORMER = PROJECT_ROOT / "data" / "models" / "trained" / "transformer_2026-04-06_151800"
-DEFAULT_LLM_MODEL = "gemma4:31b"
+DEFAULT_LLM_MODEL = "gemma4:26b"
 DEFAULT_LLM_HOST = "http://localhost:11434"
 
 KECK_LOWER = 0.6
@@ -109,7 +109,8 @@ def run_keck(year_start: int, year_end: int, model_path: Path, db_path: Path):
 # ── DRP task ─────────────────────────────────────────────────────────
 
 def run_drp(year_start: int, year_end: int, db_path: Path,
-            model_name: str = DEFAULT_LLM_MODEL, host: str = DEFAULT_LLM_HOST):
+            model_name: str = DEFAULT_LLM_MODEL, host: str = DEFAULT_LLM_HOST,
+            limit: int | None = None):
     # Load only keck-positive papers
     with sqlite3.connect(db_path) as con:
         keck_bibcodes = pd.read_sql(
@@ -124,6 +125,8 @@ def run_drp(year_start: int, year_end: int, db_path: Path,
     pubs = load_publications(db_path, query=(
         f"SELECT * FROM keck WHERE bibcode IN ({placeholders}) AND year >= {year_start} AND year <= {year_end}"
     ), params=bibcode_list)
+    if limit:
+        pubs = pubs.head(limit)
     print(f"Loaded {len(pubs)} keck-positive publications for DRP classification ({year_start}-{year_end})")
 
     if pubs.empty:
@@ -158,11 +161,14 @@ def run_drp(year_start: int, year_end: int, db_path: Path,
 # ── KOA task ────────────────────────────────────────────────────────
 
 def run_koa(db_path: Path, year_start: int | None = None, year_end: int | None = None,
-            model_name: str = DEFAULT_LLM_MODEL, host: str = DEFAULT_LLM_HOST):
+            model_name: str = DEFAULT_LLM_MODEL, host: str = DEFAULT_LLM_HOST,
+            limit: int | None = None):
     query = "SELECT * FROM koa"
     if year_start is not None:
         query += f" WHERE year >= {year_start} AND year <= {year_end}"
     pubs = load_publications(db_path, query=query)
+    if limit:
+        pubs = pubs.head(limit)
     print(f"Loaded {len(pubs)} publications from koa table")
 
     if pubs.empty:
@@ -305,6 +311,8 @@ def main():
     parser.add_argument("--llm-host", type=str, default=DEFAULT_LLM_HOST,
                         help="Ollama host URL (drp/koa tasks)")
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--limit", type=int, default=None,
+                        help="Max publications to classify (for quick iteration)")
     args = parser.parse_args()
 
     if args.task in ("keck", "drp") and args.year is None:
@@ -317,7 +325,8 @@ def main():
     elif args.task == "drp":
         year_start, year_end = parse_year_arg(args.year)
         run_drp(year_start, year_end, args.db_path,
-                model_name=args.llm_model, host=args.llm_host)
+                model_name=args.llm_model, host=args.llm_host,
+                limit=args.limit)
         merge_predictions(args.db_path, include_drp=True)
     elif args.task == "koa":
         year_start, year_end = parse_year_arg(args.year) if args.year else (None, None)
@@ -325,7 +334,8 @@ def main():
             eval_koa(args.db_path)
         else:
             run_koa(args.db_path, year_start, year_end,
-                    model_name=args.llm_model, host=args.llm_host)
+                    model_name=args.llm_model, host=args.llm_host,
+                    limit=args.limit)
 
 
 if __name__ == "__main__":

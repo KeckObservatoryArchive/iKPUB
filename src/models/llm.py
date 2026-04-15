@@ -6,6 +6,7 @@ token logprobs for calibrated probability scores.
 """
 
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -15,6 +16,8 @@ import ollama
 
 from .base_kpub_classifier import KPUBClassifier
 from data.compose import COMPOSE_FN
+
+logger = logging.getLogger(__name__)
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 MAX_RETRIES = 3
@@ -43,7 +46,7 @@ class LLMClassifier(KPUBClassifier):
         task: str = "drp",
         temperature: float = 0.0,
         max_input_tokens: int = 8192,
-        max_output_tokens: int = 256,
+        max_output_tokens: int = 8192,
         threshold: float = 0.5,
         prompt_path: str | None = None,
         **kwargs,
@@ -74,7 +77,7 @@ class LLMClassifier(KPUBClassifier):
 
     def predict(self, X_test: pd.DataFrame, return_proba: bool = False) -> pd.Series:
         compose = COMPOSE_FN[self.table]
-        client = ollama.Client(host=self.host)
+        client = ollama.Client(host=self.host, timeout=120)
         results = []
 
         for _, row in tqdm(X_test.iterrows(), total=len(X_test), desc="LLM classify"):
@@ -87,7 +90,7 @@ class LLMClassifier(KPUBClassifier):
     def predict_with_reasons(self, X_test: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
         """Classify and return (scores, reasons) for each publication."""
         compose = COMPOSE_FN[self.table]
-        client = ollama.Client(host=self.host)
+        client = ollama.Client(host=self.host, timeout=120)
         scores = []
         reasons = []
 
@@ -108,19 +111,23 @@ class LLMClassifier(KPUBClassifier):
             else:
                 user_content = f"{self.question}\n\n{truncated}"
 
-            prompt = f"{self.system_prompt}\n\n{user_content}"
+            try:
+                response = client.chat(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": self.system_prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    options={
+                        "temperature": self.temperature,
+                        "num_ctx": self.max_input_tokens,
+                    },
+                )
+            except Exception as e:
+                logger.warning("Ollama request failed (attempt %d): %s", attempt + 1, e)
+                continue
 
-            response = client.generate(
-                model=self.model_name,
-                prompt=prompt,
-                options={
-                    "temperature": self.temperature,
-                    "num_ctx": self.max_input_tokens,
-                    "num_predict": self.max_output_tokens,
-                },
-            )
-
-            content = response.get("response", "").strip()
+            content = response.get("message", {}).get("content", "").strip()
             if content:
                 return self._extract_probability(response), content
 
@@ -128,7 +135,7 @@ class LLMClassifier(KPUBClassifier):
 
     def _extract_probability(self, response) -> float:
         """Extract P(yes) from the response by parsing the first Yes/No line."""
-        content = response.get("response", "").strip().lower()
+        content = response.get("message", {}).get("content", "").strip().lower()
 
         for line in content.split("\n"):
             line = line.strip().lower().rstrip(".,!:;")
