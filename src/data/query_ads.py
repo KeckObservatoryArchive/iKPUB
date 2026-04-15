@@ -139,6 +139,12 @@ def write_to_db(docs: list[dict], table: str = TABLE) -> None:
     col_defs = ", ".join(f"{name} {sql_type}" for name, (sql_type, _) in FIELDS.items())
     cur.execute(f"CREATE TABLE IF NOT EXISTS {table} ({col_defs})")
 
+    # Add any columns that were added to FIELDS after the table was created
+    existing = {row[1] for row in cur.execute(f"PRAGMA table_info({table})")}
+    for name, (sql_type, _) in FIELDS.items():
+        if name not in existing:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
+
     placeholders = ", ".join("?" * len(COLUMNS))
     col_list = ", ".join(COLUMNS)
 

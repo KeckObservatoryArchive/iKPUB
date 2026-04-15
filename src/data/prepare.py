@@ -14,10 +14,11 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).parents[2]
 
-def load_publications(db_path: str, query: str = "SELECT * FROM keck") -> pd.DataFrame:
+def load_publications(db_path: str, query: str = "SELECT * FROM keck",
+                      params: list | None = None) -> pd.DataFrame:
     """Load publications from a SQLite database into a DataFrame."""
     with sqlite3.connect(db_path) as con:
-        return pd.read_sql(query, con)
+        return pd.read_sql(query, con, params=params)
 
 def load_manual_pubs(manual_db_path: str, kpub_db_path: str, table: str = "pubs",
                      year_start: int = 2000, year_end: int = 2024) -> pd.DataFrame:

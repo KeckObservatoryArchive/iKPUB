@@ -183,8 +183,7 @@ def compose_koa_text(row: pd.Series, extraction_mode: str = "sentence") -> str:
     aff      = _safe(row.get("aff"))
     title    = _safe(row.get("title"))
 
-    # archive_terms = ["koa", "archive"]
-    archive_terms = ["koa", "archive", "pypeit", "nirc2", "lris", "hires", "nirspec", "smooth", "archived", "archival", "download", "repository", "dataset"]
+    archive_terms = ["koa", "archive", "archival", "download"]
 
     parts = []
     if full:
@@ -200,10 +199,41 @@ def compose_koa_text(row: pd.Series, extraction_mode: str = "sentence") -> str:
 
     return " ".join(parts)
 
+def compose_drp_text(row: pd.Series, extraction_mode: str = "sentence") -> str:
+    """Compose text for DRP (Data Reduction Pipeline) classification.
+
+    Fields ordered by importance (text will be truncated).
+    """
+    full     = _safe(row.get("full"))
+    abstract = _safe(row.get("abstract"))
+    aff      = _safe(row.get("aff"))
+    title    = _safe(row.get("title"))
+
+    drp_terms = [
+        "drp", "data reduction pipeline",
+        "pypeit", "reduce",
+    ] # data pipeline, data reduction
+
+    parts = []
+    if full:
+        full = _remove_table_blocks(full)
+        drp_sentences = _extract_relevant_sentences(full, terms=drp_terms, mode=extraction_mode)
+        parts.append(f"FULL: {drp_sentences}")
+    if abstract:
+        parts.append(f"ABSTRACT: {abstract}")
+    if aff:
+        parts.append(f"AFFILIATIONS: {aff}")
+    if title:
+        parts.append(f"TITLE: {title}")
+
+    return " ".join(parts)
+
+
 COMPOSE_FN = {
     "keck": compose_keck_text,
     "small": compose_keck_text,
     "koa": compose_koa_text,
     "combined": compose_koa_text,
     "autokpub": compose_keck_text,
+    "drp": compose_drp_text,
 }

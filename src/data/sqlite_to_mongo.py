@@ -90,9 +90,18 @@ def main():
             continue
 
         if bibcode in existing:
+            set_fields = {"ilabel": row["ilabel"], "keck_score": row["keck_score"]}
+            if row.get("drp_label") is not None:
+                set_fields["drp_label"] = row["drp_label"]
+            if row.get("drp_score") is not None:
+                set_fields["drp_score"] = row["drp_score"]
+            if row.get("koa_label") is not None:
+                set_fields["koa_label"] = row["koa_label"]
+            if row.get("koa_score") is not None:
+                set_fields["koa_score"] = row["koa_score"]
             updates.append(UpdateOne(
                 {"bibcode": bibcode},
-                {"$set": {"ilabel": row["ilabel"], "keck_score": row["keck_score"]}},
+                {"$set": set_fields},
             ))
         elif row.get("ilabel") == "keck":
             doc = {k: normalize(v) for k, v in row.items() if v is not None}

@@ -34,6 +34,7 @@ from data.prepare import load_publications, load_manual_pubs
 from models.transformer import TransformerClassifier
 from models.embedding import EmbeddingClassifier
 from models.snippet import SnippetClassifier
+from models.llm import LLMClassifier
 
 PROJECT_ROOT = Path(__file__).parents[2]
 DB_PATH = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
@@ -44,6 +45,7 @@ MODELS = {
     "transformer": TransformerClassifier,
     "embedding": EmbeddingClassifier,
     "snippet": SnippetClassifier,
+    "llm": LLMClassifier,
 }
 
 # Map config keys to constructor param names where they differ

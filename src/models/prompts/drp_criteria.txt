@@ -1,0 +1,26 @@
+# Keck DRP Classification Criteria
+
+## Classification Principles
+
+A publication is labeled **"Yes"** only if **all** of the following are true:
+
+- **The paper references a Keck DRP, either by name or generically.** Naming a specific pipeline (e.g., "PypeIt," "MAKEE") qualifies, and so does generic language that clearly refers to a Keck-provided pipeline (e.g., "the Keck NIRSPEC pipeline," "the observatory's data reduction pipeline"). Fully generic language with no Keck attribution ("reduced using standard techniques," "custom scripts") does not qualify.
+- **The pipeline was applied to data from a Keck instrument.** A Keck-supported pipeline used on another telescope's data does not count.
+- **The pipeline is one that Keck actively supports.** "Actively supports" means Keck does at least one of the following:
+  - Maintains the code (bug fixes, updates, staff time)
+  - Hosts it under Keck infrastructure (GitHub org, servers, distribution pages)
+- **The pipeline was the tool used to reduce the data**, not merely cited as a reference or used by someone else upstream. If a paper cites a pipeline paper but describes using a different tool, the answer is No.
+
+## What Counts as Yes
+
+- PypeIt on Keck data qualifies — Keck staff actively maintain PypeIt and formally partner with the project under DSI
+- MAKEE on HIRES or ESI data qualifies — Keck hosts, distributes, and maintains it
+- A modified or forked version of a Keck-supported pipeline still qualifies
+- If a paper uses both a supported and unsupported pipeline, the supported usage still qualifies
+- Using pre-reduced KOA archival products counts if the paper identifies the Keck pipeline that produced them
+
+## What Counts as No
+
+- Pipelines Keck links to but does not maintain (e.g., REDSPEC, ESIRedux, DEEP2/spec2d, LPipe, CarPy, FLAME)
+- Citing a DRP paper but using a different tool (e.g., IRAF, custom scripts) for the actual reduction
+- Community extensions used as the only named tool, without the underlying official pipeline (e.g., KCWIKit alone)
