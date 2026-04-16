@@ -1,18 +1,25 @@
-"""Load, label, and merge full text for publications in kpub.db.
+"""Load publications and full text into DataFrames for classification.
 
-Usage:
+SQLite:
     python src/data/prepare.py
     python src/data/prepare.py --table koa
+
+MongoDB (no standalone step — used as a library by predict_labels.py):
+    from data.prepare import load_publications_mongo
+    df = load_publications_mongo(collection, year_start=2024, year_end=2025)
 """
 
 import argparse
 import sqlite3
 from pathlib import Path
 
-# 3rd Party
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).parents[2]
+FULL_TEXT_DIR = PROJECT_ROOT / "data" / "pubs" / "full_text"
+
+
+# --- SQLite ---
 
 def load_publications(db_path: str, query: str = "SELECT * FROM keck",
                       params: list | None = None) -> pd.DataFrame:
@@ -42,13 +49,7 @@ def load_manual_pubs(manual_db_path: str, kpub_db_path: str, table: str = "pubs"
 
 
 def load_full_text(full_text_dir: Path) -> pd.DataFrame:
-    """
-    Load full-text files from year subdirectories under full_text_dir.
-
-    Each subdirectory is expected to be named by year (e.g. '2022').
-    Each .txt file inside is named by bibcode and contains the full text.
-    Returns a DataFrame with columns: bibcode, full.
-    """
+    """Load full-text files from year subdirectories under full_text_dir."""
     records = []
     for subdir in sorted(full_text_dir.iterdir()):
         if not subdir.is_dir() or not subdir.name.isdigit():
@@ -59,11 +60,7 @@ def load_full_text(full_text_dir: Path) -> pd.DataFrame:
 
 
 def merge_manual(df: pd.DataFrame, manual: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add a boolean 'keck_manual' column — True if the bibcode appears in manual["BIBCODE"].
-
-    Expects df to have a 'bibcode' column and manual to have a 'BIBCODE' column.
-    """
+    """Add a boolean 'keck_manual' column — True if the bibcode appears in manual["BIBCODE"]."""
     df = df.copy()
     df["keck_manual"] = df["bibcode"].isin(manual["BIBCODE"])
     return df
@@ -87,6 +84,26 @@ MANUAL_LABEL_QUERIES = {
     "keck": "SELECT bibcode FROM pubs WHERE mission = 'keck'",
     "koa": "SELECT bibcode FROM koa",
 }
+
+
+# --- MongoDB ---
+
+def load_publications_mongo(collection, year_start: int | None = None,
+                            year_end: int | None = None) -> pd.DataFrame:
+    """Load publications from MongoDB, merge full text from filesystem.
+
+    Returns a DataFrame ready for classifiers (has 'full' column from disk).
+    """
+    query = {}
+    if year_start is not None:
+        query["year"] = {"$gte": year_start, "$lte": year_end or year_start}
+
+    df = pd.DataFrame(list(collection.find(query)))
+    if df.empty:
+        return df
+
+    df = merge_full_text(df, FULL_TEXT_DIR)
+    return df
 
 
 if __name__ == "__main__":

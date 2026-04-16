@@ -99,6 +99,10 @@ def main():
                 set_fields["koa_label"] = row["koa_label"]
             if row.get("koa_score") is not None:
                 set_fields["koa_score"] = row["koa_score"]
+            if row.get("koa_reason") is not None:
+                set_fields["koa_reason"] = row["koa_reason"]
+            if row.get("drp_reason") is not None:
+                set_fields["drp_reason"] = row["drp_reason"]
             updates.append(UpdateOne(
                 {"bibcode": bibcode},
                 {"$set": set_fields},

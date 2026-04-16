@@ -121,6 +121,7 @@ class LLMClassifier(KPUBClassifier):
                     options={
                         "temperature": self.temperature,
                         "num_ctx": self.max_input_tokens,
+                        "num_predict": self.max_output_tokens,
                     },
                 )
             except Exception as e:

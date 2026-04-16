@@ -1,28 +1,20 @@
-"""Batch-predict publication labels and write them to SQLite.
+"""Batch-predict publication labels.
 
 Supports three tasks that run sequentially:
 
-  1. **keck** — Transformer classifier on the ``keck`` table.
-     Writes ``keck_predictions`` (bibcode, ilabel, keck_score).
+  1. **keck** — Transformer classifier. Writes ilabel, keck_score.
+  2. **drp** — LLM classifier on keck-positive papers. Writes idrp, drp_reason.
+  3. **koa** — LLM classifier. Writes ikoa, koa_reason.
 
-  2. **drp** — LLM classifier on keck-positive papers from
-     ``keck_predictions``.  Writes ``drp_predictions``
-     (bibcode, drp_label, drp_score, model, timestamp).
-
-  3. **koa** — LLM classifier on the curated ``koa`` table.
-     Writes ``koa_predictions``
-     (bibcode, koa_label, koa_score, model, timestamp).
-     Supports ``--eval`` to compare against ``keck_manual`` ground truth.
-
-After keck/drp tasks, a merged ``predictions`` table is rebuilt by joining
-the ``keck`` source table with the prediction tables.
-
-Usage:
+Usage (SQLite):
     python -m eval.predict_labels 2024
     python -m eval.predict_labels 2024 --task drp
     python -m eval.predict_labels --task koa
-    python -m eval.predict_labels --task koa --eval
-    python -m eval.predict_labels 2020-2024 --task keck --model-path data/models/trained/my_model
+
+Usage (MongoDB):
+    python -m eval.predict_labels 2024 --mongo
+    python -m eval.predict_labels 2024 --mongo --task drp
+    python -m eval.predict_labels 2024 --mongo --task koa --collection test_articles
 """
 
 import argparse
@@ -32,7 +24,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from data.prepare import load_publications
+from data.prepare import load_publications, load_publications_mongo
 from models.transformer import TransformerClassifier
 from models.llm import LLMClassifier
 
@@ -245,7 +237,7 @@ def eval_koa(db_path: Path):
 
 # ── Merge ────────────────────────────────────────────────────────────
 
-def merge_predictions(db_path: Path, include_drp: bool = False, include_koa: bool = False):
+def merge_predictions(db_path: Path, include_drp: bool = False):
     """Rebuild the ``predictions`` table from keck + prediction tables."""
     with sqlite3.connect(db_path) as con:
         tables = {r[0] for r in con.execute(
@@ -265,26 +257,15 @@ def merge_predictions(db_path: Path, include_drp: bool = False, include_koa: boo
         drp_cols = ""
         if include_drp and "drp_predictions" in tables:
             drp_join = "LEFT JOIN drp_predictions d ON k.bibcode = d.bibcode"
-            drp_cols = ", COALESCE(d.drp_label, 'not keck') AS drp_label, d.drp_score"
+            drp_cols = ", COALESCE(d.drp_label, 'not keck') AS drp_label, d.drp_score, d.reason AS drp_reason"
         else:
-            drp_join = ""
-            drp_cols = ", 'not keck' AS drp_label, NULL AS drp_score"
-
-        koa_join = ""
-        koa_cols = ""
-        if include_koa and "koa_predictions" in tables:
-            koa_join = "LEFT JOIN koa_predictions ka ON k.bibcode = ka.bibcode"
-            koa_cols = ", COALESCE(ka.koa_label, 'not keck') AS koa_label, ka.koa_score"
-        else:
-            koa_join = ""
-            koa_cols = ", 'not keck' AS koa_label, NULL AS koa_score"
+            drp_cols = ", 'not keck' AS drp_label, NULL AS drp_score, NULL AS drp_reason"
 
         query = f"""
-            SELECT {col_list}, kp.ilabel, kp.keck_score{drp_cols}{koa_cols}
+            SELECT {col_list}, kp.ilabel, kp.keck_score{drp_cols}
             FROM keck k
             JOIN keck_predictions kp ON k.bibcode = kp.bibcode
             {drp_join}
-            {koa_join}
         """
 
         merged = pd.read_sql(query, con)
@@ -292,6 +273,152 @@ def merge_predictions(db_path: Path, include_drp: bool = False, include_koa: boo
         merged.to_sql("predictions", con, index=False)
 
     print(f"\nMerged {len(merged)} rows into predictions table")
+
+
+def merge_koa_predictions(db_path: Path, year_start: int, year_end: int):
+    """Update the predictions table with KOA labels for the given year range."""
+    with sqlite3.connect(db_path) as con:
+        tables = {r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
+        if "predictions" not in tables:
+            print("predictions table not found — skipping KOA merge.")
+            return
+        if "koa_predictions" not in tables:
+            print("koa_predictions table not found — skipping KOA merge.")
+            return
+
+        # Ensure KOA columns exist
+        existing_cols = {r[1] for r in con.execute("PRAGMA table_info(predictions)")}
+        for col, col_type in [("koa_label", "TEXT"), ("koa_score", "REAL"), ("koa_reason", "TEXT")]:
+            if col not in existing_cols:
+                con.execute(f"ALTER TABLE predictions ADD COLUMN {col} {col_type}")
+
+        # Update rows that have KOA predictions
+        con.execute("""
+            UPDATE predictions
+            SET koa_label = kp.koa_label,
+                koa_score = kp.koa_score,
+                koa_reason = kp.reason
+            FROM koa_predictions kp
+            WHERE predictions.bibcode = kp.bibcode
+              AND predictions.year >= ?
+              AND predictions.year <= ?
+        """, (str(year_start), str(year_end)))
+
+        # Set rows in year range that weren't in the KOA query
+        con.execute("""
+            UPDATE predictions
+            SET koa_label = 'not koa',
+                koa_score = NULL,
+                koa_reason = 'not found in koa query'
+            WHERE year >= ? AND year <= ?
+              AND koa_label IS NULL
+        """, (str(year_start), str(year_end)))
+
+        koa_counts = pd.read_sql(
+            "SELECT koa_label, COUNT(*) as n FROM predictions WHERE year >= ? AND year <= ? GROUP BY koa_label",
+            con, params=(str(year_start), str(year_end)),
+        )
+
+    print(f"\nMerged KOA predictions into predictions table ({year_start}-{year_end})")
+    print(koa_counts.to_string(index=False))
+
+
+# ── MongoDB tasks ───────────────────────────────────────────────────
+
+def run_keck_mongo(year_start, year_end, model_path, collection):
+    from pymongo import UpdateOne
+
+    print(f"Loading transformer from {model_path}")
+    model = TransformerClassifier.load(model_path)
+
+    pubs = load_publications_mongo(collection, year_start, year_end)
+    print(f"Loaded {len(pubs)} publications for years {year_start}-{year_end}")
+    if pubs.empty:
+        print("No publications found. Exiting.")
+        return
+
+    probs = model.predict(pubs, return_proba=True)
+
+    ops = []
+    for bibcode, prob in zip(pubs["bibcode"], probs):
+        ops.append(UpdateOne(
+            {"bibcode": bibcode},
+            {"$set": {"ilabel": keck_ilabel(prob), "keck_score": float(prob)}},
+        ))
+    collection.bulk_write(ops)
+
+    labels = [keck_ilabel(p) for p in probs]
+    summary = pd.Series(labels).value_counts()
+    print(f"\nUpdated {len(ops)} documents with keck predictions")
+    print(summary.to_string())
+
+
+def run_drp_mongo(year_start, year_end, collection,
+                  model_name=DEFAULT_LLM_MODEL, host=DEFAULT_LLM_HOST,
+                  limit=None):
+    from pymongo import UpdateOne
+
+    pubs = load_publications_mongo(collection, year_start, year_end)
+    pubs = pubs[pubs["ilabel"] == "keck"]
+    if limit:
+        pubs = pubs.head(limit)
+    print(f"Loaded {len(pubs)} keck-positive publications for DRP classification ({year_start}-{year_end})")
+
+    if pubs.empty:
+        return
+
+    classifier = LLMClassifier(
+        model_name=model_name, host=host, table="drp", task="drp",
+    )
+    scores, reasons = classifier.predict_with_reasons(pubs)
+
+    ops = []
+    for bibcode, score, reason in zip(pubs["bibcode"], scores, reasons):
+        ops.append(UpdateOne(
+            {"bibcode": bibcode},
+            {"$set": {"idrp": drp_ilabel(score), "drp_reason": reason}},
+        ))
+    collection.bulk_write(ops)
+
+    labels = [drp_ilabel(s) for s in scores]
+    summary = pd.Series(labels).value_counts()
+    print(f"\nUpdated {len(ops)} documents with DRP predictions")
+    print(summary.to_string())
+
+
+def run_koa_mongo(year_start, year_end, collection,
+                  model_name=DEFAULT_LLM_MODEL, host=DEFAULT_LLM_HOST,
+                  limit=None):
+    from pymongo import UpdateOne
+
+    pubs = load_publications_mongo(collection, year_start, year_end)
+    if limit:
+        pubs = pubs.head(limit)
+    print(f"Loaded {len(pubs)} publications for KOA classification")
+
+    if pubs.empty:
+        return
+
+    classifier = LLMClassifier(
+        model_name=model_name, host=host, table="koa", task="koa",
+    )
+    scores, reasons = classifier.predict_with_reasons(pubs)
+
+    ops = []
+    for bibcode, score, reason in zip(pubs["bibcode"], scores, reasons):
+        label = "koa" if score >= 0.5 else "not koa"
+        ops.append(UpdateOne(
+            {"bibcode": bibcode},
+            {"$set": {"ikoa": label, "koa_reason": reason}},
+        ))
+    collection.bulk_write(ops)
+
+    labels = ["koa" if s >= 0.5 else "not koa" for s in scores]
+    summary = pd.Series(labels).value_counts()
+    print(f"\nUpdated {len(ops)} documents with KOA predictions")
+    print(summary.to_string())
 
 
 # ── CLI ──────────────────────────────────────────────────────────────
@@ -311,31 +438,48 @@ def main():
     parser.add_argument("--llm-host", type=str, default=DEFAULT_LLM_HOST,
                         help="Ollama host URL (drp/koa tasks)")
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--mongo", action="store_true", help="use MongoDB instead of SQLite")
+    parser.add_argument("--collection", default="test_articles", help="MongoDB collection (default: test_articles)")
     parser.add_argument("--limit", type=int, default=None,
                         help="Max publications to classify (for quick iteration)")
     args = parser.parse_args()
 
-    if args.task in ("keck", "drp") and args.year is None:
-        parser.error("year is required for keck and drp tasks")
+    if args.year is None:
+        parser.error("year is required")
+    year_start, year_end = parse_year_arg(args.year)
 
-    if args.task == "keck":
-        year_start, year_end = parse_year_arg(args.year)
-        run_keck(year_start, year_end, args.model_path, args.db_path)
-        merge_predictions(args.db_path)
-    elif args.task == "drp":
-        year_start, year_end = parse_year_arg(args.year)
-        run_drp(year_start, year_end, args.db_path,
-                model_name=args.llm_model, host=args.llm_host,
-                limit=args.limit)
-        merge_predictions(args.db_path, include_drp=True)
-    elif args.task == "koa":
-        year_start, year_end = parse_year_arg(args.year) if args.year else (None, None)
-        if args.eval:
-            eval_koa(args.db_path)
-        else:
-            run_koa(args.db_path, year_start, year_end,
+    if args.mongo:
+        from data.db_mongo_conn import from_env
+        conn = from_env("kpub", args.collection)
+        collection = conn.collection
+
+        if args.task == "keck":
+            run_keck_mongo(year_start, year_end, args.model_path, collection)
+        elif args.task == "drp":
+            run_drp_mongo(year_start, year_end, collection,
+                          model_name=args.llm_model, host=args.llm_host,
+                          limit=args.limit)
+        elif args.task == "koa":
+            run_koa_mongo(year_start, year_end, collection,
+                          model_name=args.llm_model, host=args.llm_host,
+                          limit=args.limit)
+    else:
+        if args.task == "keck":
+            run_keck(year_start, year_end, args.model_path, args.db_path)
+            merge_predictions(args.db_path)
+        elif args.task == "drp":
+            run_drp(year_start, year_end, args.db_path,
                     model_name=args.llm_model, host=args.llm_host,
                     limit=args.limit)
+            merge_predictions(args.db_path, include_drp=True)
+        elif args.task == "koa":
+            if args.eval:
+                eval_koa(args.db_path)
+            else:
+                run_koa(args.db_path, year_start, year_end,
+                        model_name=args.llm_model, host=args.llm_host,
+                        limit=args.limit)
+                merge_koa_predictions(args.db_path, year_start, year_end)
 
 
 if __name__ == "__main__":
