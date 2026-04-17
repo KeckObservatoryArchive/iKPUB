@@ -3,25 +3,21 @@
 Text extraction is imperfect (broken equations, column merges, odd hyphenations)
 but good enough for classification. ~10,000 papers takes ~5-15 min.
 
-Usage (SQLite):
-    python src/data/fetch_full_text.py --start-year 2000 --end-year 2025
-    python src/data/fetch_full_text.py --table koa --start-year 2008 --end-year 2025
-
-Usage (MongoDB):
-    python src/data/fetch_full_text.py --mongo --year 2024
-    python src/data/fetch_full_text.py --mongo --collection test_articles --start-year 2020 --end-year 2025
+Usage:
+    python src/data/fetch_full_text.py --year 2024
+    python src/data/fetch_full_text.py --collection test_articles --start-year 2020 --end-year 2025
 """
 
 import os
 import json
-import sqlite3
 import argparse
 from pathlib import Path
 import requests
 import fitz  # pymupdf
 
+from data.db_mongo_conn import from_env
+
 PROJECT_ROOT = Path(__file__).parents[2]
-DB_PATH = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
 PDF_BASE = PROJECT_ROOT / "data" / "pubs" / "pdf"
 TEXT_BASE = PROJECT_ROOT / "data" / "pubs" / "full_text"
 
@@ -112,15 +108,7 @@ def parse_pdf_urls(links_data):
     if not links_data:
         return []
 
-    # Handle SQLite (JSON-encoded string) vs MongoDB (already a list)
-    if isinstance(links_data, str):
-        items = json.loads(links_data)
-        if not isinstance(items, list):
-            items = [items]
-    else:
-        items = links_data
-
-    links = [json.loads(item) if isinstance(item, str) else item for item in items]
+    links = [json.loads(item) if isinstance(item, str) else item for item in links_data]
 
     urls = []
     for link in links:
@@ -138,73 +126,7 @@ def parse_pdf_urls(links_data):
     return urls
 
 
-def run(year, table="keck"):
-
-    pdf_dir = PDF_BASE / str(year)
-    text_dir = TEXT_BASE / str(year)
-    os.makedirs(pdf_dir, exist_ok=True)
-    os.makedirs(text_dir, exist_ok=True)
-
-    con = sqlite3.connect(DB_PATH)
-    rows = con.execute(
-        f"SELECT bibcode, links_data FROM {table} WHERE year = ?",
-        (str(year),)
-    ).fetchall()
-    con.close()
-
-    total = len(rows)
-    print(f"Found {total} papers for {year} in {table}")
-
-    extracted = 0
-    already_done = 0
-    skipped = 0
-    failed = 0
-
-    for i, (bibcode, links_data_raw) in enumerate(rows, 1):
-        outfile = pdf_dir / f"{bibcode}.pdf"
-        text_outfile = text_dir / f"{bibcode}.txt"
-
-        if os.path.exists(text_outfile):
-            already_done += 1
-            continue
-
-        pdf_urls = parse_pdf_urls(links_data_raw)
-
-        if not pdf_urls:
-            skipped += 1
-            print(f"[{i}/{total}] {bibcode} — SKIP: no PDF URLs")
-            continue
-
-        success = False
-        for pdf_url in pdf_urls:
-            if download_pdf(pdf_url, outfile):
-                success = True
-                break
-
-        if not success:
-            failed += 1
-            print(f"[{i}/{total}] {bibcode} — FAIL: download failed")
-            continue
-
-        if not os.path.exists(outfile):
-            failed += 1
-            print(f"[{i}/{total}] {bibcode} — FAIL: PDF missing after download")
-            continue
-
-        text = extract_block_text(outfile)
-
-        with open(text_outfile, "w") as tf:
-            tf.write(text)
-
-        extracted += 1
-        print(f"[{i}/{total}] {bibcode} — ok")
-
-    print(f"\nDone: {extracted} extracted, {already_done} already done, {skipped} skipped, {failed} failed (of {total})")
-
-
-def run_mongo(year, collection_name="test_articles"):
-    from data.db_mongo_conn import from_env
-
+def run(year, collection_name="test_articles"):
     pdf_dir = PDF_BASE / str(year)
     text_dir = TEXT_BASE / str(year)
     os.makedirs(pdf_dir, exist_ok=True)
@@ -269,9 +191,8 @@ def run_mongo(year, collection_name="test_articles"):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Download and extract text from ADS papers")
-    parser.add_argument("--table", default="keck", help="DB table to read from (default: keck)")
-    parser.add_argument("--mongo", action="store_true", help="read from MongoDB instead of SQLite")
-    parser.add_argument("--collection", default="test_articles", help="MongoDB collection (default: test_articles)")
+    parser.add_argument("--collection", default="test_articles",
+                        help="MongoDB collection (default: test_articles)")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--year", type=int, help="single year to process")
     group.add_argument("--start-year", type=int, help="first year in range")
@@ -282,9 +203,5 @@ if __name__ == "__main__":
     if not args.year and not args.end_year:
         parser.error("--end-year is required with --start-year")
 
-    run_fn = run_mongo if args.mongo else run
     for y in years:
-        if args.mongo:
-            run_fn(y, args.collection)
-        else:
-            run_fn(y, args.table)
+        run(y, args.collection)

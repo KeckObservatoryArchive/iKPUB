@@ -1,20 +1,14 @@
 """Train and evaluate KPUB classifiers.
 
-Loads a table from kpub.db, splits into train/test, and reports accuracy
-and confusion matrix. Supports training from scratch, loading a saved model
-for inference, or finetuning from a checkpoint.
+Loads publications from MongoDB, derives labels from the ``affiliation`` field
+(``"keck"`` → positive, everything else → negative), splits into train/test,
+and reports accuracy and confusion matrix. Supports training from scratch,
+loading a saved model for inference, or finetuning from a checkpoint.
 
 Usage:
-    python src/eval/test_harness.py transformer --table koa
-    python src/eval/test_harness.py embedding --table keck --save
-
-When training on a table that contains rows from another table (e.g.
-"combined" includes all of "koa"), use --holdout-table to define the test
-set from that table's bibcodes. This ensures the same test split is used
-across training stages and prevents data leakage:
-
-    python src/eval/test_harness.py transformer --table combined --holdout-table koa --save
-    python src/eval/test_harness.py transformer --table koa --finetune <path>
+    python src/eval/test_harness.py transformer --save
+    python src/eval/test_harness.py embedding --table koa
+    python src/eval/test_harness.py transformer --year 2020-2024 --collection test_articles
 """
 
 # Standard Library
@@ -30,16 +24,17 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, accuracy_score
 
 # Local
-from data.prepare import load_publications, load_manual_pubs, load_publications_mongo
+from data.db_mongo_conn import from_env
+from data.prepare import load_publications_mongo
 from models.transformer import TransformerClassifier
 from models.embedding import EmbeddingClassifier
 from models.snippet import SnippetClassifier
 from models.llm import LLMClassifier
 
 PROJECT_ROOT = Path(__file__).parents[2]
-DB_PATH = PROJECT_ROOT / "data" / "pubs" / "kpub.db"
 CONFIG_PATH = PROJECT_ROOT / "config" / "models.yaml"
 OUTPUT_DIR = PROJECT_ROOT / "out" / "experiments"
+SAVE_DIR = PROJECT_ROOT / "data" / "models" / "trained"
 
 MODELS = {
     "transformer": TransformerClassifier,
@@ -59,7 +54,6 @@ def load_config(model_name: str) -> dict:
     with open(CONFIG_PATH) as f:
         all_config = yaml.safe_load(f)
     config = all_config.get(model_name, {})
-    # Remap keys to match constructor parameter names
     return {CONFIG_KEY_MAP.get(k, k): v for k, v in config.items()}
 
 
@@ -73,63 +67,33 @@ def build_model(model_name: str, table: str = "keck", config: dict | None = None
     return MODELS[model_name](**config), config
 
 
-SAVE_DIR = PROJECT_ROOT / "data" / "models" / "trained"
+def load_labeled_pubs(collection, year_start: int, year_end: int):
+    """Load pubs from Mongo and derive binary ``keck_manual`` from affiliation.
+
+    Returns (pubs, stats) where stats reports class balance and skipped rows.
+    """
+    pubs = load_publications_mongo(collection, year_start, year_end)
+    before = len(pubs)
+    pubs = pubs[pubs["affiliation"].notna() & (pubs["affiliation"] != "")]
+    skipped = before - len(pubs)
+    pubs["keck_manual"] = (pubs["affiliation"] == "keck").astype(int)
+    stats = {
+        "skipped_no_affiliation": skipped,
+        "n_positives": int((pubs["keck_manual"] == 1).sum()),
+        "n_negatives": int((pubs["keck_manual"] == 0).sum()),
+    }
+    return pubs, stats
 
 
-def _holdout_split(pubs, holdout_table: str):
-    """Split using bibcodes from holdout_table to define a consistent test set."""
-    holdout_pubs = load_publications(
-        DB_PATH, query=f"SELECT bibcode, keck_manual FROM {holdout_table} WHERE year < 2024 and year > 1999",
-    )
-    _, test_bibcodes = train_test_split(holdout_pubs["bibcode"], test_size=0.2, random_state=42)
-    test_set = set(test_bibcodes)
+def eval_model(model_name: str, collection, table: str = "keck",
+               load_path: str | None = None, finetune_path: str | None = None,
+               config: dict | None = None, eval_fraction: float = 1.0,
+               year_start: int = 2000, year_end: int = 2023):
+    pubs, stats = load_labeled_pubs(collection, year_start, year_end)
 
-    is_test = pubs["bibcode"].isin(test_set)
     X = pubs.drop("keck_manual", axis=1)
     y = pubs["keck_manual"]
-    return X[~is_test], X[is_test], y[~is_test], y[is_test]
-
-
-def eval_model(model_name: str, table: str = "keck", load_path: str | None = None,
-               finetune_path: str | None = None, config: dict | None = None,
-               holdout_table: str | None = None, eval_table: str | None = None,
-               eval_fraction: float = 1.0, eval_db: str | None = None,
-               year_start: int = 2000, year_end: int = 2023,
-               mongo_collection=None):
-    skipped_no_affiliation = 0
-    n_positives = n_negatives = 0
-
-    if mongo_collection is not None:
-        pubs = load_publications_mongo(mongo_collection, year_start, year_end)
-        before = len(pubs)
-        pubs = pubs[pubs["affiliation"].notna() & (pubs["affiliation"] != "")]
-        skipped_no_affiliation = before - len(pubs)
-        pubs["keck_manual"] = (pubs["affiliation"] == "keck").astype(int)
-        n_positives = int((pubs["keck_manual"] == 1).sum())
-        n_negatives = int((pubs["keck_manual"] == 0).sum())
-        X = pubs.drop("keck_manual", axis=1)
-        y = pubs["keck_manual"]
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    elif eval_db is not None:
-        eval_pubs = load_manual_pubs(eval_db, str(DB_PATH), table=table, year_start=year_start, year_end=year_end)
-        X_test = eval_pubs.drop("keck_manual", axis=1)
-        y_test = eval_pubs["keck_manual"]
-        X_train, y_train = None, None
-    else:
-        pubs = load_publications(DB_PATH, query=f"SELECT * FROM {table} WHERE year <= {year_end} and year >= {year_start}")
-        if eval_table is not None:
-            eval_pubs = load_publications(DB_PATH, query=f"SELECT * FROM {eval_table} WHERE year <= {year_end} and year >= {year_start}")
-            eval_pubs = eval_pubs[~eval_pubs["bibcode"].isin(pubs["bibcode"])]
-            X_train = pubs.drop("keck_manual", axis=1)
-            y_train = pubs["keck_manual"]
-            X_test = eval_pubs.drop("keck_manual", axis=1)
-            y_test = eval_pubs["keck_manual"]
-        elif holdout_table is not None:
-            X_train, X_test, y_train, y_test = _holdout_split(pubs, holdout_table)
-        else:
-            X = pubs.drop("keck_manual", axis=1)
-            y = pubs["keck_manual"]
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
     if eval_fraction < 1.0:
         X_test, _, y_test, _ = train_test_split(
@@ -160,11 +124,7 @@ def eval_model(model_name: str, table: str = "keck", load_path: str | None = Non
         predictions = model.predict(X_test)
         duration = time.time() - start
 
-    return model, config, y_test, predictions, duration, {
-        "skipped_no_affiliation": skipped_no_affiliation,
-        "n_positives": n_positives,
-        "n_negatives": n_negatives,
-    }
+    return model, config, y_test, predictions, duration, stats
 
 
 def write_results(model_name: str, table: str, config: dict, y_test, predictions, duration: float):
@@ -197,28 +157,18 @@ def write_results(model_name: str, table: str, config: dict, y_test, predictions
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate a KPUB classifier")
     parser.add_argument("model", choices=MODELS.keys(), help="model to evaluate")
-    parser.add_argument("--table", default="keck", help="DB table to use (default: keck)")
+    parser.add_argument("--table", default="keck",
+                        help="classification task / text-composition mode (default: keck)")
     parser.add_argument("--save", action="store_true", help="save the trained model after evaluation")
     parser.add_argument("--load", metavar="PATH", help="load a saved model instead of training")
     parser.add_argument("--finetune", metavar="PATH", help="warm-start training from a saved model checkpoint")
-    parser.add_argument("--holdout-table", metavar="TABLE",
-                        help="define test set from this table's bibcodes to prevent train/test overlap across tables")
-    parser.add_argument("--eval-table", metavar="TABLE",
-                        help="evaluate on this table instead of splitting --table")
     parser.add_argument("--eval-fraction", type=float, default=1.0, metavar="FRAC",
                         help="fraction of eval/test data to use (e.g. 0.2 for 20%%)")
-    parser.add_argument("--eval-db", metavar="PATH",
-                        help="evaluate on data from this database (e.g. data/pubs/manual_kpub.db)")
     parser.add_argument("--year", metavar="RANGE", default="2000-2023",
                         help="year or year range, e.g. 2024 or 2020-2024 (default: 2000-2023)")
-    parser.add_argument("--mongo", action="store_true",
-                        help="load training data from MongoDB instead of SQLite")
     parser.add_argument("--collection", default="test_articles",
-                        help="MongoDB collection (with --mongo, default: test_articles)")
+                        help="MongoDB collection (default: test_articles)")
     args = parser.parse_args()
-
-    if args.mongo and (args.holdout_table or args.eval_table or args.eval_db):
-        parser.error("--mongo cannot be combined with --holdout-table, --eval-table, or --eval-db")
 
     if "-" in args.year:
         y_start, y_end = args.year.split("-", 1)
@@ -226,19 +176,13 @@ if __name__ == "__main__":
     else:
         year_start = year_end = int(args.year)
 
-    mongo_conn = None
-    mongo_collection = None
-    if args.mongo:
-        from data.db_mongo_conn import from_env
-        mongo_conn = from_env("kpub", args.collection)
-        mongo_collection = mongo_conn.collection
+    mongo_conn = from_env("kpub", args.collection)
 
     model, config, y_test, predictions, duration, stats = eval_model(
-        args.model, table=args.table, load_path=args.load, finetune_path=args.finetune,
-        holdout_table=args.holdout_table, eval_table=args.eval_table,
-        eval_fraction=args.eval_fraction, eval_db=args.eval_db,
+        args.model, mongo_conn.collection, table=args.table,
+        load_path=args.load, finetune_path=args.finetune,
+        eval_fraction=args.eval_fraction,
         year_start=year_start, year_end=year_end,
-        mongo_collection=mongo_collection,
     )
     results, out_path = write_results(args.model, args.table, config, y_test, predictions, duration)
 
@@ -253,11 +197,9 @@ if __name__ == "__main__":
     print(f"Accuracy: {results['results']['accuracy']:.4f}")
     print(f"Confusion matrix: tn={cm['tn']}  fp={cm['fp']}  fn={cm['fn']}  tp={cm['tp']}")
     print(f"Duration: {duration:.1f}s")
-    if args.mongo:
-        print(f"Positives (affiliation=keck): {stats['n_positives']}")
-        print(f"Negatives: {stats['n_negatives']}")
-        print(f"Skipped (no affiliation): {stats['skipped_no_affiliation']}")
+    print(f"Positives (affiliation=keck): {stats['n_positives']}")
+    print(f"Negatives: {stats['n_negatives']}")
+    print(f"Skipped (no affiliation): {stats['skipped_no_affiliation']}")
     print(f"Results saved to: {out_path}")
 
-    if mongo_conn is not None:
-        del mongo_conn
+    del mongo_conn
