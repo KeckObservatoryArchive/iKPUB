@@ -381,16 +381,11 @@ class TransformerClassifier(KPUBClassifier):
         """Load a previously saved model from *path*.
 
         Rebuilds the architecture from ``meta.json`` and loads weights
-        from ``model.pt``. Legacy checkpoints (``"legacy": true`` in
-        meta.json) are delegated to ``LegacyTransformerClassifier``.
+        from ``model.pt``.
         """
         path = Path(path)
         with open(path / "meta.json") as f:
             meta = json.load(f)
-
-        if meta.get("legacy"):
-            from .transformer_legacy import LegacyTransformerClassifier
-            return LegacyTransformerClassifier.load(path)
 
         instance = cls(
             hf_model_name=meta["hf_model_name"],
