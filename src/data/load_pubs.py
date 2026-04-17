@@ -2,8 +2,8 @@
 
 Used as a library by the training and prediction pipelines:
 
-    from data.prepare import load_publications_mongo
-    df = load_publications_mongo(collection, year_start=2024, year_end=2025)
+    from data.load_pubs import load_pubs
+    df = load_pubs(collection, year_start=2024, year_end=2025)
 """
 
 from pathlib import Path
@@ -32,8 +32,8 @@ def merge_full_text(df: pd.DataFrame, full_text_dir: Path) -> pd.DataFrame:
     return df.merge(full, on="bibcode", how="left")
 
 
-def load_publications_mongo(collection, year_start: int | None = None,
-                            year_end: int | None = None) -> pd.DataFrame:
+def load_pubs(collection, year_start: int | None = None,
+              year_end: int | None = None) -> pd.DataFrame:
     """Load publications from MongoDB, merge full text from filesystem.
 
     Returns a DataFrame ready for classifiers (has 'full' column from disk).

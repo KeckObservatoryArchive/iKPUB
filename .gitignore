@@ -12,7 +12,7 @@ wheels/
 
 config/models.yaml
 config/queue/**
-scripts/
+scratch/
 
 # Data
 data/proposals/**

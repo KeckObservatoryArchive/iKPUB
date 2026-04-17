@@ -7,9 +7,9 @@ Supports three tasks:
   3. **koa** — LLM classifier. Writes ikoa, koa_reason.
 
 Usage:
-    python -m eval.predict_labels 2024
-    python -m eval.predict_labels 2024 --task drp
-    python -m eval.predict_labels 2024 --task koa --collection test_articles
+    python -m scripts.predict 2024
+    python -m scripts.predict 2024 --task drp
+    python -m scripts.predict 2024 --task koa --collection test_articles
 """
 
 import argparse
@@ -19,7 +19,7 @@ import pandas as pd
 from pymongo import UpdateOne
 
 from data.db_mongo_conn import from_env
-from data.prepare import load_publications_mongo
+from data.load_pubs import load_pubs
 from models.transformer import TransformerClassifier
 from models.llm import LLMClassifier
 
@@ -64,7 +64,7 @@ def run_keck(year_start, year_end, model_path, collection):
     print(f"Loading transformer from {model_path}")
     model = TransformerClassifier.load(model_path)
 
-    pubs = load_publications_mongo(collection, year_start, year_end)
+    pubs = load_pubs(collection, year_start, year_end)
     print(f"Loaded {len(pubs)} publications for years {year_start}-{year_end}")
     if pubs.empty:
         print("No publications found. Exiting.")
@@ -88,7 +88,7 @@ def run_keck(year_start, year_end, model_path, collection):
 
 def run_drp(year_start, year_end, collection,
             model_name=DEFAULT_LLM_MODEL, host=DEFAULT_LLM_HOST, limit=None):
-    pubs = load_publications_mongo(collection, year_start, year_end)
+    pubs = load_pubs(collection, year_start, year_end)
     pubs = pubs[pubs["ilabel"] == "keck"]
     if limit:
         pubs = pubs.head(limit)
@@ -118,7 +118,7 @@ def run_drp(year_start, year_end, collection,
 
 def run_koa(year_start, year_end, collection,
             model_name=DEFAULT_LLM_MODEL, host=DEFAULT_LLM_HOST, limit=None):
-    pubs = load_publications_mongo(collection, year_start, year_end)
+    pubs = load_pubs(collection, year_start, year_end)
     pubs = pubs[pubs["ilabel"] == "keck"]
     if limit:
         pubs = pubs.head(limit)

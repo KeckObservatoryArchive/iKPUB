@@ -35,15 +35,16 @@ python src/data/fetch_full_text.py --collection test_articles --start-year 2020 
 Loads articles from MongoDB, derives `keck_manual` from the `affiliation` field (`"keck"` → positive, everything else → negative), merges full text from the filesystem, and runs the standard train/test split.
 
 ```zsh
-python src/eval/test_harness.py transformer --year 2000-2023 --save
-python src/eval/test_harness.py embedding --collection test_articles
+python src/scripts/train.py transformer --year 2000-2023 --save
+python src/scripts/train.py embedding --collection test_articles
+python src/scripts/train.py transformer --no-test --save  # train on all labeled data
 ```
 
 Docs without an `affiliation` set are skipped and reported in the run summary.
 
 Available models: `transformer`, `embedding`, `snippet` (rule-based), `llm`. Hyperparameters in `config/models.yaml`.
 
-To seed a fresh collection with broad-query training examples, see `scripts/insert_training_data.py`.
+To seed a fresh collection with broad-query training examples, see `scratch/insert_training_data.py`.
 
 ### 3. Predict Labels
 
@@ -51,11 +52,11 @@ Loads articles from MongoDB, merges full text from filesystem, runs classifiers,
 
 ```zsh
 # Keck classification (transformer)
-python -m src.eval.predict_labels 2024 --collection test_articles --task keck
+python -m src.scripts.predict 2024 --collection test_articles --task keck
 
 # DRP classification (LLM, runs on keck-positive papers only)
-python -m src.eval.predict_labels 2024 --collection test_articles --task drp
+python -m src.scripts.predict 2024 --collection test_articles --task drp
 
 # KOA classification (LLM)
-python -m src.eval.predict_labels 2024 --collection test_articles --task koa
+python -m src.scripts.predict 2024 --collection test_articles --task koa
 ```
