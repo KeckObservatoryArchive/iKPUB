@@ -21,5 +21,3 @@ embedding:
   learning_rate: 1.0e-3
   dropout: 0.3
   extraction_mode: sentence
-
-snippet: {}

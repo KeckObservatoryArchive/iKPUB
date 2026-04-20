@@ -29,8 +29,6 @@ from sklearn.metrics import confusion_matrix, accuracy_score
 from data.db_mongo_conn import from_env
 from data.load_pubs import load_pubs
 from models.transformer import TransformerClassifier
-from models.embedding import EmbeddingClassifier
-from models.snippet import SnippetClassifier
 from models.llm import LLMClassifier
 
 PROJECT_ROOT = Path(__file__).parents[2]
@@ -40,8 +38,6 @@ SAVE_DIR = PROJECT_ROOT / "data" / "models" / "trained"
 
 MODELS = {
     "transformer": TransformerClassifier,
-    "embedding": EmbeddingClassifier,
-    "snippet": SnippetClassifier,
     "llm": LLMClassifier,
 }
 
