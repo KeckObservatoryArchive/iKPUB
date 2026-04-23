@@ -17,6 +17,12 @@ MONGO_USER=username
 MONGO_PWD=password
 ```
 
+Copy the tracked config templates to their local (gitignored) counterparts, then edit as needed:
+```zsh
+cp config/models.default.yaml config/models.yaml
+cp config/article_subset.default.yaml config/article_subset.yaml
+```
+
 ---
 
 Articles live in MongoDB. Full text stays on the filesystem (`data/pubs/full_text/`). Predictions write directly back to MongoDB.
@@ -46,7 +52,7 @@ Available models: `transformer`, `embedding`, `snippet` (rule-based), `llm`. Hyp
 
 #### Fine-tuning workflow
 
-Train a base model once on the full reviewed history, then fine-tune on newly reviewed years as they arrive. The reviewed-subset filter lives in `config/article_subset.yaml` (currently: 2020–2024 excluding `from_broad_query=true`; 2025+ included wholesale).
+Train a base model once on the full reviewed history, then fine-tune on newly reviewed years as they arrive. The reviewed-subset filter lives in `config/article_subset.yaml` (copied from `config/article_subset.default.yaml`; currently: 2020–2024 excluding `from_broad_query=true`; 2025+ included wholesale).
 
 ```zsh
 # 1. Base model — full reviewed history
