@@ -1,6 +1,6 @@
 transformer:
   hf_model_name: adsabs/astroBERT
-  epochs: 5
+  epochs: 10
   batch_size: 32
   learning_rate: 2.0e-5
   max_length: 512

@@ -10,6 +10,7 @@ wheels/
 .venv
 .env
 
+config/article_subset.yaml
 config/models.yaml
 config/queue/**
 scratch/

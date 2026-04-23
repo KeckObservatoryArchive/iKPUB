@@ -27,12 +27,13 @@ from sklearn.metrics import confusion_matrix, accuracy_score
 
 # Local
 from data.db_mongo_conn import from_env
-from data.load_pubs import load_pubs
+from data.load_pubs import build_subset_query, load_pubs
 from models.transformer import TransformerClassifier
 from models.llm import LLMClassifier
 
 PROJECT_ROOT = Path(__file__).parents[2]
 CONFIG_PATH = PROJECT_ROOT / "config" / "models.yaml"
+SUBSET_CONFIG_PATH = PROJECT_ROOT / "config" / "article_subset.yaml"
 OUTPUT_DIR = PROJECT_ROOT / "out" / "experiments"
 SAVE_DIR = PROJECT_ROOT / "data" / "models" / "trained"
 
@@ -65,12 +66,13 @@ def build_model(model_name: str, table: str = "keck", config: dict | None = None
     return MODELS[model_name](**config), config
 
 
-def load_labeled_pubs(collection, year_start: int, year_end: int):
+def load_labeled_pubs(collection, year_start: int, year_end: int,
+                      subset_query: dict | None = None):
     """Load pubs from Mongo and derive binary ``keck_manual`` from affiliation.
 
     Returns (pubs, stats) where stats reports class balance and skipped rows.
     """
-    pubs = load_pubs(collection, year_start, year_end)
+    pubs = load_pubs(collection, year_start, year_end, query=subset_query)
     before = len(pubs)
     pubs = pubs[pubs["affiliation"].notna() & (pubs["affiliation"] != "")]
     skipped = before - len(pubs)
@@ -86,8 +88,9 @@ def load_labeled_pubs(collection, year_start: int, year_end: int):
 def run(model_name: str, collection, table: str = "keck",
         load_path: str | None = None, finetune_path: str | None = None,
         config: dict | None = None, eval_fraction: float = 1.0,
-        year_start: int = 2000, year_end: int = 2023, no_test: bool = False):
-    pubs, stats = load_labeled_pubs(collection, year_start, year_end)
+        year_start: int = 2000, year_end: int = 2023, no_test: bool = False,
+        subset_query: dict | None = None):
+    pubs, stats = load_labeled_pubs(collection, year_start, year_end, subset_query=subset_query)
 
     X = pubs.drop("keck_manual", axis=1)
     y = pubs["keck_manual"]
@@ -172,6 +175,9 @@ if __name__ == "__main__":
                         help="year or year range, e.g. 2024 or 2020-2024 (default: 2000-2023)")
     parser.add_argument("--collection", default="test_articles",
                         help="MongoDB collection (default: test_articles)")
+    parser.add_argument("--subset-articles", nargs="?", const=str(SUBSET_CONFIG_PATH),
+                        default=None, metavar="PATH",
+                        help=f"subset articles using a YAML config (default: {SUBSET_CONFIG_PATH}); overrides --year")
     args = parser.parse_args()
 
     if args.no_test and args.load:
@@ -185,6 +191,11 @@ if __name__ == "__main__":
     else:
         year_start = year_end = int(args.year)
 
+    subset_query = None
+    if args.subset_articles:
+        subset_query = build_subset_query(Path(args.subset_articles))
+        print(f"Subsetting articles with query: {subset_query}")
+
     mongo_conn = from_env("kpub", args.collection)
 
     model, config, y_test, predictions, duration, stats = run(
@@ -193,6 +204,7 @@ if __name__ == "__main__":
         eval_fraction=args.eval_fraction,
         year_start=year_start, year_end=year_end,
         no_test=args.no_test,
+        subset_query=subset_query,
     )
 
     print(f"\n{'='*50}")
@@ -216,7 +228,6 @@ if __name__ == "__main__":
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         save_path = SAVE_DIR / f"{args.model}_{timestamp}"
         model.save(save_path)
-        print(f"Model saved to: {save_path}")
 
     if not args.no_test:
         print(f"Results saved to: {out_path}")

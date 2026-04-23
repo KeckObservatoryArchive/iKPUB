@@ -1,0 +1,8 @@
+# Criteria for subsetting articles loaded from MongoDB.
+# Each range is an inclusive year window with optional field-value exclusions.
+# Articles whose year falls outside every range are excluded.
+ranges:
+  - years: [2020, 2024]
+    exclude:
+      from_broad_query: true
+  - years: [2025, null]   # 2025 and later: include all
