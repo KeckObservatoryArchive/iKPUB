@@ -11,6 +11,18 @@ Usage:
     python src/scripts/train.py embedding --table koa
     python src/scripts/train.py transformer --no-test --save
     python src/scripts/train.py transformer --year 2020-2024 --collection test_articles
+
+Fine-tuning workflow:
+    First, train a base model on the full reviewed history:
+        python src/scripts/train.py transformer --year 2000-2025 --collection articles --save
+
+    Then, as each new year of data is reviewed, fine-tune the base model on the
+    reviewed subset defined in config/article_subset.yaml:
+        python src/scripts/train.py transformer --year 2020-2025 --collection articles \\
+            --save --finetune [BASE MODEL] --subset-articles
+
+    When 2026 data is reviewed, bump the year range (and update
+    config/article_subset.yaml) to extend the window accordingly.
 """
 
 # Standard Library

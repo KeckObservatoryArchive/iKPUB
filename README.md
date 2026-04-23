@@ -44,6 +44,21 @@ Docs without an `affiliation` set are skipped and reported in the run summary.
 
 Available models: `transformer`, `embedding`, `snippet` (rule-based), `llm`. Hyperparameters in `config/models.yaml`.
 
+#### Fine-tuning workflow
+
+Train a base model once on the full reviewed history, then fine-tune on newly reviewed years as they arrive. The reviewed-subset filter lives in `config/article_subset.yaml` (currently: 2020–2024 excluding `from_broad_query=true`; 2025+ included wholesale).
+
+```zsh
+# 1. Base model — full reviewed history
+python src/scripts/train.py transformer --year 2000-2025 --collection articles --save
+
+# 2. Fine-tune once 2025 data is reviewed
+python src/scripts/train.py transformer --year 2020-2025 --collection articles \
+    --save --finetune [BASE MODEL] --subset-articles
+```
+
+When 2026 data is reviewed, extend the year range (e.g. `--year 2020-2026`) and update `config/article_subset.yaml` to match, then fine-tune again.
+
 To seed a fresh collection with broad-query training examples, see `scratch/insert_training_data.py`.
 
 ### 3. Predict Labels
